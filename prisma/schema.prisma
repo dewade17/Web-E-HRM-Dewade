@@ -1,0 +1,548 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// ===== Enums =====
+
+enum Role {
+  KARYAWAN
+  HR
+  OPERASIONAL
+  DIREKTUR
+}
+
+// Role atasan saja (selain KARYAWAN) untuk persetujuan
+enum AtasanRole {
+  HR
+  OPERASIONAL
+  DIREKTUR
+}
+
+enum CutiType {
+  cuti
+  sakit
+  izin
+}
+
+enum ApproveStatus {
+  disetujui
+  ditolak
+  pending
+}
+
+enum WorkStatus {
+  berjalan
+  berhenti
+  selesai
+}
+
+enum ShiftStatus {
+  KERJA
+  LIBUR
+}
+
+enum AbsensiStatus {
+  tepat
+  terlambat
+}
+
+enum LemburStatus {
+  pending
+  disetujui
+  ditolak
+}
+
+enum Bulan {
+  JANUARI
+  FEBRUARI
+  MARET
+  APRIL
+  MEI
+  JUNI
+  JULI
+  AGUSTUS
+  SEPTEMBER
+  OKTOBER
+  NOVEMBER
+  DESEMBER
+}
+
+// Hanya status ini yg valid untuk persetujuan laporan absensi
+enum ReportStatus {
+  terkirim
+  disetujui
+  ditolak
+}
+
+// ====== Status baru khusus Agenda Kerja ======
+enum AgendaStatus {
+  diproses
+  ditunda
+  selesai
+}
+
+/// ===== Models =====
+
+model Location {
+  id_location String  @id @default(uuid()) @db.Char(36)
+  nama_kantor String  @db.VarChar(255)
+  latitude    Decimal @db.Decimal(10, 6)
+  longitude   Decimal @db.Decimal(10, 6)
+  radius      Int?
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  Absensi_datang Absensi[] @relation("absen_datang")
+  Absensi_pulang Absensi[] @relation("absen_pulang")
+  User           User[]
+
+  @@map("location")
+}
+
+model Broadcast {
+  id_broadcasts String    @id @default(uuid()) @db.Char(36)
+  title         String    @db.LongText
+  message       String    @db.LongText
+  created_at    DateTime  @default(now()) @db.DateTime(0)
+  updated_at    DateTime  @updatedAt @db.DateTime(0)
+  deleted_at    DateTime? @db.DateTime(0)
+
+  recipients BroadcastRecipient[]
+
+  @@map("broadcasts")
+}
+
+model BroadcastRecipient {
+  id_broadcast_recipients String    @id @default(uuid()) @db.Char(36)
+  id_broadcast            String    @db.Char(36)
+  id_user                 String    @db.Char(36)
+  nama_karyawan_snapshot  String    @db.VarChar(255)
+  created_at              DateTime  @default(now()) @db.DateTime(0)
+  updated_at              DateTime  @updatedAt @db.DateTime(0)
+  deleted_at              DateTime? @db.DateTime(0)
+
+  broadcast Broadcast @relation(fields: [id_broadcast], references: [id_broadcasts], onDelete: Cascade, onUpdate: Cascade)
+  user      User      @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_broadcast])
+  @@index([id_user])
+  @@map("broadcasts_recipients")
+}
+
+model Cuti {
+  id_cuti           String        @id @default(uuid()) @db.Char(36)
+  id_user           String        @db.Char(36)
+  tanggal_pengajuan DateTime?     @db.Date
+  tanggal_mulai     DateTime?     @db.Date
+  tanggal_selesai   DateTime?     @db.Date
+  bukti_url         String?       @db.LongText
+  keterangan        CutiType
+  alasan            String?       @db.LongText
+  status            ApproveStatus
+  current_level     Int?
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  user      User           @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  approvals CutiApproval[]
+
+  @@index([id_user])
+  @@map("Cuti")
+}
+
+model CutiApproval {
+  id_cuti_approval String        @id @default(uuid()) @db.Char(36)
+  id_cuti          String        @db.Char(36)
+  level            Int
+  approver_user_id String?       @db.Char(36)
+  approver_role    Role?
+  decision         ApproveStatus @default(pending)
+  decided_at       DateTime?     @db.DateTime(0)
+  note             String?       @db.LongText
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  cuti     Cuti  @relation(fields: [id_cuti], references: [id_cuti], onDelete: Cascade, onUpdate: Cascade)
+  approver User? @relation("CutiApproval_approver_user_idToUser", fields: [approver_user_id], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_cuti, level])
+  @@index([approver_user_id])
+  @@map("cuti_approval")
+}
+
+model PolaKerja {
+  id_pola_kerja   String   @id @default(uuid()) @db.Char(36)
+  nama_pola_kerja String   @db.VarChar(255)
+  jam_mulai       DateTime @db.DateTime(0)
+  jam_selesai     DateTime @db.DateTime(0)
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  shifts ShiftKerja[]
+
+  @@map("pola_kerja")
+}
+
+model ShiftKerja {
+  id_shift_kerja  String    @id @default(uuid()) @db.Char(36)
+  id_user         String    @db.Char(36)
+  tanggal_mulai   DateTime? @db.Date
+  tanggal_selesai DateTime? @db.Date
+  hari_kerja      String
+  status          ShiftStatus
+  id_pola_kerja   String?   @db.Char(36)
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  user      User       @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  polaKerja PolaKerja? @relation(fields: [id_pola_kerja], references: [id_pola_kerja], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_user, tanggal_mulai])
+  @@index([id_pola_kerja])
+  @@map("shift_kerja")
+}
+
+/* ====== REVISI: Pecah menjadi AGENDA (master) & AGENDA_KERJA (detail) ====== */
+
+// Master daftar agenda
+model Agenda {
+  id_agenda   String   @id @default(uuid()) @db.Char(36)
+  nama_agenda String   @db.LongText
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  items AgendaKerja[]
+
+  @@map("agenda")
+}
+
+// Detail agenda yang dikerjakan user & (opsional) terikat ke absensi
+model AgendaKerja {
+  id_agenda_kerja  String        @id @default(uuid()) @db.Char(36)
+  id_absensi       String?       @db.Char(36) // opsional
+  id_agenda        String        @db.Char(36)
+  id_user          String        @db.Char(36)
+
+  deskripsi_kerja  String        @db.LongText
+  start_date       DateTime?     @db.DateTime(0)
+  end_date         DateTime?     @db.DateTime(0)
+
+  duration_seconds Int?        
+
+  status           AgendaStatus
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  // Relations
+  user    User    @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  absensi Absensi? @relation(fields: [id_absensi], references: [id_absensi], onDelete: SetNull, onUpdate: Cascade)
+  agenda  Agenda  @relation(fields: [id_agenda], references: [id_agenda], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_user, start_date])
+  @@index([id_absensi])
+  @@index([id_agenda])
+  @@map("agenda_kerja")
+}
+
+model User {
+  id_user                   String    @id @default(uuid()) @db.Char(36)
+  nama_pengguna             String    @db.VarChar(255)
+  email                     String    @unique @db.VarChar(255)
+  password_hash             String    @db.VarChar(255)
+  kontak                    String?   @db.VarChar(32)
+  password_updated_at       DateTime? @db.DateTime(0)
+  agama                     String?   @db.VarChar(32)
+  foto_profil_user          String?   @db.LongText
+  tanggal_lahir             DateTime? @db.Date
+  role                      Role
+  id_departement            String?   @db.Char(36)
+  id_location               String?   @db.Char(36)
+  reset_password_token      String?   @db.VarChar(255)
+  reset_password_expires_at DateTime? @db.DateTime(0)
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  departement Departement? @relation(fields: [id_departement], references: [id_departement], onDelete: SetNull, onUpdate: Cascade)
+  kantor      Location?    @relation(fields: [id_location], references: [id_location], onDelete: Restrict, onUpdate: Cascade)
+
+  faces              Face[]
+  agendas            AgendaKerja[]      // tetap pakai nama field lama untuk kompatibilitas
+  cuti               Cuti[]
+  shifts             ShiftKerja[]
+  story_planners     StoryPlanner[]
+  absensi            Absensi[]
+  lembur             Lembur[]
+  shift_piket        ShiftPiket[]
+  shift_storyPlanner ShiftStoryPlanner[]
+  broadcast_rcv      BroadcastRecipient[]
+  devices            Device[]
+  cuti_approvals     CutiApproval[]     @relation("CutiApproval_approver_user_idToUser")
+  lembur_approvals   LemburApproval[]   @relation("LemburApproval_approver_user_idToUser")
+
+  absensi_reports_received   AbsensiReportRecipient[]
+
+  @@index([id_departement])
+  @@index([id_location])
+  @@map("user")
+}
+
+model Departement {
+  id_departement   String @id @default(uuid()) @db.Char(36)
+  nama_departement String @db.VarChar(256)
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  users          User[]
+  story_planners StoryPlanner[]
+
+  @@map("departement")
+}
+
+model Face {
+  id_face    String @id @default(uuid()) @db.Char(36)
+  id_user    String @db.Char(36)
+  image_face String @db.LongText
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  user User @relation(fields: [id_user], references: [id_user], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([id_user])
+  @@map("face")
+}
+
+model StoryPlanner {
+  id_story        String     @id @default(uuid()) @db.Char(36)
+  id_user         String     @db.Char(36)
+  id_departement  String?    @db.Char(36)
+  deskripsi_kerja String     @db.LongText
+  count_time      DateTime?  @db.DateTime(0)
+  status          WorkStatus
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  user        User         @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  departement Departement? @relation(fields: [id_departement], references: [id_departement], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([id_user])
+  @@index([id_departement])
+  @@map("story_planner")
+}
+
+model Device {
+  id_device         String    @id @default(uuid()) @db.Char(36)
+  id_user           String    @db.Char(36)
+  device_label      String?   @db.VarChar(255)
+  platform          String?   @db.VarChar(50)
+  os_version        String?   @db.VarChar(50)
+  app_version       String?   @db.VarChar(50)
+  device_identifier String?   @db.VarChar(191)
+  last_seen         DateTime? @db.DateTime(0)
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  user User @relation(fields: [id_user], references: [id_user], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([id_user])
+  @@map("device")
+}
+
+model Absensi {
+  id_absensi           String        @id @default(uuid()) @db.Char(36)
+  id_user              String        @db.Char(36)
+  face_verified_masuk  Boolean
+  face_verified_pulang Boolean
+  tanggal              DateTime?     @db.Date
+  id_lokasi_pulang     String?       @db.Char(36)
+  id_lokasi_datang     String?       @db.Char(36)
+  jam_masuk            DateTime?     @db.DateTime(0)
+  jam_pulang           DateTime?     @db.DateTime(0)
+  status               AbsensiStatus
+
+  in_latitude   Decimal? @db.Decimal(10, 6)
+  in_longitude  Decimal? @db.Decimal(10, 6)
+  out_latitude  Decimal? @db.Decimal(10, 6)
+  out_longitude Decimal? @db.Decimal(10, 6)
+  created_at    DateTime  @default(now()) @db.DateTime(0)
+  updated_at    DateTime  @updatedAt @db.DateTime(0)
+  deleted_at    DateTime? @db.DateTime(0)
+
+  user      User      @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  lokasiIn  Location? @relation("absen_datang", fields: [id_lokasi_datang], references: [id_location], onDelete: SetNull, onUpdate: Cascade)
+  lokasiOut Location? @relation("absen_pulang", fields: [id_lokasi_pulang], references: [id_location], onDelete: SetNull, onUpdate: Cascade)
+
+  agendas           AgendaKerja[] // relasi ke agenda_kerja (detail agenda pada hari tsb)
+  report_recipients AbsensiReportRecipient[]
+
+  @@unique([id_user, tanggal])
+  @@index([id_user, tanggal])
+  @@index([id_lokasi_datang])
+  @@index([id_lokasi_pulang])
+  @@map("Absensi")
+}
+
+model Lembur {
+  id_lembur     String       @id @default(uuid()) @db.Char(36)
+  id_user       String       @db.Char(36)
+  tanggal       DateTime?    @db.Date
+  jam_mulai     DateTime?    @db.DateTime(0)
+  jam_selesai   DateTime?    @db.DateTime(0)
+  alasan        String?      @db.LongText
+  status        LemburStatus
+  current_level Int?
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  user      User             @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  approvals LemburApproval[]
+
+  @@index([id_user, tanggal])
+  @@index([status])
+  @@map("Lembur")
+}
+
+model LemburApproval {
+  id_lembur_approval String        @id @default(uuid()) @db.Char(36)
+  id_lembur          String        @db.Char(36)
+  level              Int
+  approver_user_id   String?       @db.Char(36)
+  approver_role      Role?
+  decision           ApproveStatus @default(pending)
+  decided_at         DateTime?     @db.DateTime(0)
+  note               String?       @db.LongText
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  lembur   Lembur @relation(fields: [id_lembur], references: [id_lembur], onDelete: Cascade, onUpdate: Cascade)
+  approver User?  @relation("LemburApproval_approver_user_idToUser", fields: [approver_user_id], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_lembur, level])
+  @@index([approver_user_id])
+  @@map("lembur_approval")
+}
+
+model JadwalPiket {
+  id_jadwal_piket String    @id @default(uuid()) @db.Char(36)
+  Tahun           DateTime? @db.Date
+  Bulan           Bulan
+  keterangan      String?   @db.LongText
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  shifts ShiftPiket[]
+
+  @@map("jadwal_piket")
+}
+
+model JadwalStoryPlanner {
+  id_jadwal_story_planner String    @id @default(uuid()) @db.Char(36)
+  Tahun                   DateTime? @db.Date
+  Bulan                   Bulan
+  keterangan              String?   @db.LongText
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  shifts ShiftStoryPlanner[]
+
+  @@map("jadwal_story_planer")
+}
+
+model ShiftPiket {
+  id_shift_piket  String @id @default(uuid()) @db.Char(36)
+  id_jadwal_piket String @db.Char(36)
+  id_user         String @db.Char(36)
+  hari_piket      String
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  jadwal JadwalPiket @relation(fields: [id_jadwal_piket], references: [id_jadwal_piket], onDelete: Cascade, onUpdate: Cascade)
+  user   User        @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_jadwal_piket])
+  @@index([id_user])
+  @@map("shift_piket")
+}
+
+model ShiftStoryPlanner {
+  id_shift_story_planner  String @id @default(uuid()) @db.Char(36)
+  id_jadwal_story_planner String @db.Char(36)
+  id_user                 String @db.Char(36)
+  hari_story_planner      String
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  jadwal JadwalStoryPlanner @relation(fields: [id_jadwal_story_planner], references: [id_jadwal_story_planner], onDelete: Cascade, onUpdate: Cascade)
+  user   User               @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_jadwal_story_planner])
+  @@index([id_user])
+  @@map("shift_story_planer")
+}
+
+/// ====== Penerima Laporan Absensi (Persetujuan Atasan) ======
+model AbsensiReportRecipient {
+  id_absensi_report_recipient String       @id @default(uuid()) @db.Char(36)
+  id_absensi                  String       @db.Char(36)
+  id_user                     String       @db.Char(36)
+
+  recipient_role_snapshot     AtasanRole?
+  catatan                     String?      @db.LongText
+  status                      ReportStatus @default(terkirim)
+  notified_at                 DateTime?    @db.DateTime(0)
+  read_at                     DateTime?    @db.DateTime(0)
+  acted_at                    DateTime?    @db.DateTime(0)
+
+  created_at                  DateTime  @default(now()) @db.DateTime(0)
+  updated_at                  DateTime  @updatedAt @db.DateTime(0)
+  deleted_at                  DateTime? @db.DateTime(0)
+
+  absensi   Absensi @relation(fields: [id_absensi], references: [id_absensi], onDelete: Cascade, onUpdate: Cascade)
+  recipient User    @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_absensi])
+  @@index([id_user])
+  @@unique([id_absensi, id_user])
+  @@map("absensi_report_recipients")
+}
