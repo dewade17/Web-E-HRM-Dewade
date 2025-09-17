@@ -1,5 +1,5 @@
-// app/api/agenda-kerja/user/[id]/route.js
-// GET /api/agenda-kerja/user/:id?status=...&from=...&to=...&has_absensi=1|0&limit=50&offset=0
+// app/api/mobile/agenda-kerja/user/[id]/route.js
+// GET /api/mobile/agenda-kerja/user/:id?status=...&from=...&to=...&has_absensi=1|0&limit=50&offset=0
 
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
