@@ -6,6 +6,7 @@ import db from '@/lib/prisma';
 import { createClient } from '@supabase/supabase-js';
 import jwt from 'jsonwebtoken';
 import { verifyAuthToken } from '@/lib/jwt';
+import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 
 // KARYAWAN hanya boleh ubah field ini
 const KARYAWAN_ALLOW = new Set(['nama_pengguna', 'email', 'kontak', 'agama', 'foto_profil_user', 'tanggal_lahir']);
@@ -163,6 +164,21 @@ export async function PUT(req, { params }) {
 
     const wantsRemove = body.remove_foto === true || body.remove_foto === 'true';
 
+    let tanggalLahirValue;
+    if (body.tanggal_lahir !== undefined) {
+      if (body.tanggal_lahir === null) {
+        tanggalLahirValue = null;
+      } else if (typeof body.tanggal_lahir === 'string' && body.tanggal_lahir.trim() === '') {
+        tanggalLahirValue = null;
+      } else {
+        const parsedTanggal = parseDateOnlyToUTC(body.tanggal_lahir);
+        if (!(parsedTanggal instanceof Date)) {
+          return NextResponse.json({ message: "Field 'tanggal_lahir' harus berupa tanggal yang valid." }, { status: 400 });
+        }
+        tanggalLahirValue = parsedTanggal;
+      }
+    }
+
     let uploadedUrl = null;
     if (type === 'form') {
       const file = body.file || body.foto || body.foto_profil_user;
@@ -181,7 +197,7 @@ export async function PUT(req, { params }) {
       ...(body.email !== undefined && { email: String(body.email).trim().toLowerCase() }),
       ...(body.kontak !== undefined && { kontak: body.kontak === null ? null : String(body.kontak).trim() }),
       ...(body.agama !== undefined && { agama: body.agama === null ? null : String(body.agama).trim() }),
-      ...(body.tanggal_lahir !== undefined && { tanggal_lahir: body.tanggal_lahir ? new Date(body.tanggal_lahir) : null }),
+      ...(body.tanggal_lahir !== undefined && { tanggal_lahir: tanggalLahirValue ?? null }),
       ...(uploadedUrl && { foto_profil_user: uploadedUrl }),
       ...(!uploadedUrl && wantsRemove ? { foto_profil_user: null } : {}),
     };

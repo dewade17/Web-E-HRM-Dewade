@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 
 const SHIFT_STATUS = ['KERJA', 'LIBUR'];
 
@@ -21,8 +22,11 @@ async function ensureAuth(req) {
 function parseBodyDate(value, field) {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  if (typeof value === 'string' && !value.trim()) {
+    throw new Error(`Field '${field}' harus berupa tanggal yang valid.`);
+  }
+  const parsed = parseDateOnlyToUTC(value);
+  if (!(parsed instanceof Date)) {
     throw new Error(`Field '${field}' harus berupa tanggal yang valid.`);
   }
   return parsed;
@@ -33,15 +37,15 @@ function buildDateFilter(searchParams, field) {
   const to = searchParams.get(`${field}To`);
   const filter = {};
   if (from) {
-    const parsed = new Date(from);
-    if (Number.isNaN(parsed.getTime())) {
+    const parsed = parseDateOnlyToUTC(from);
+    if (!(parsed instanceof Date)) {
       throw new Error(`Parameter '${field}From' tidak valid.`);
     }
     filter.gte = parsed;
   }
   if (to) {
-    const parsed = new Date(to);
-    if (Number.isNaN(parsed.getTime())) {
+    const parsed = parseDateOnlyToUTC(to);
+    if (!(parsed instanceof Date)) {
       throw new Error(`Parameter '${field}To' tidak valid.`);
     }
     filter.lte = parsed;

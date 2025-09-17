@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { parseDateTimeToUTC } from '@/helpers/date-helper';
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -21,8 +22,8 @@ function parseOptionalDate(value, field) {
   if (value === null || value === '') {
     throw new Error(`Field '${field}' tidak boleh kosong.`);
   }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  const parsed = parseDateTimeToUTC(value);
+  if (!(parsed instanceof Date)) {
     throw new Error(`Field '${field}' harus berupa tanggal/waktu yang valid.`);
   }
   return parsed;

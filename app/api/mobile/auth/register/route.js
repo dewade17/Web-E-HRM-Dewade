@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import db from '../../../../../lib/prisma';
+import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 
 const ROLES = ['KARYAWAN', 'HR', 'OPERASIONAL', 'DIREKTUR'];
 
@@ -48,11 +49,11 @@ export async function POST(req) {
     // Tanggal lahir (opsional) dengan validasi format
     let tanggal_lahir = null;
     if (body.tanggal_lahir) {
-      const t = new Date(body.tanggal_lahir);
-      if (Number.isNaN(t.getTime())) {
+      const parsedTanggal = parseDateOnlyToUTC(body.tanggal_lahir);
+      if (!(parsedTanggal instanceof Date)) {
         return NextResponse.json({ message: 'Format tanggal_lahir tidak valid (gunakan YYYY-MM-DD atau ISO 8601).' }, { status: 400 });
       }
-      tanggal_lahir = t;
+      tanggal_lahir = parsedTanggal;
     }
 
     const agama = body.agama ?? null;

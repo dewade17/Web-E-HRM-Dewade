@@ -5,13 +5,14 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { parseDateTimeToUTC } from '@/helpers/date-helper';
 
 const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
 
 function toDateOrNull(v) {
   if (!v) return null;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d;
+  const parsed = parseDateTimeToUTC(v);
+  return parsed ?? null;
 }
 
 // Autentikasi (Bearer JWT atau NextAuth session)

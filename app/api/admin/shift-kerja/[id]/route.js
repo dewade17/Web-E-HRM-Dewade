@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { parseDateOnlyToUTC } from '@/helpers/date-helper';
+import { parseDateTimeToUTC } from '@/helpers/date-helper';
 
 const SHIFT_STATUS = ['KERJA', 'LIBUR'];
 
@@ -21,8 +23,11 @@ async function ensureAuth(req) {
 function parseBodyDate(value, field) {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  if (typeof value === 'string' && !value.trim()) {
+    throw new Error(`Field '${field}' harus berupa tanggal yang valid.`);
+  }
+  const parsed = parseDateOnlyToUTC(value);
+  if (!(parsed instanceof Date)) {
     throw new Error(`Field '${field}' harus berupa tanggal yang valid.`);
   }
   return parsed;
