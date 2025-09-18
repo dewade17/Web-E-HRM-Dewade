@@ -188,10 +188,16 @@ model CutiApproval {
 }
 
 model PolaKerja {
-  id_pola_kerja   String   @id @default(uuid()) @db.Char(36)
-  nama_pola_kerja String   @db.VarChar(255)
-  jam_mulai       DateTime @db.DateTime(0)
-  jam_selesai     DateTime @db.DateTime(0)
+  id_pola_kerja         String   @id @default(uuid()) @db.Char(36)
+  nama_pola_kerja       String   @db.VarChar(255)
+  jam_mulai             DateTime @db.DateTime(0)
+  jam_selesai           DateTime @db.DateTime(0)
+
+  // === Tambahan istirahat ===
+  jam_istirahat_mulai   DateTime? @db.DateTime(0)
+  jam_istirahat_selesai DateTime? @db.DateTime(0)
+  /// Maksimal durasi istirahat dalam menit (opsional)
+  maks_jam_istirahat    Int?
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
