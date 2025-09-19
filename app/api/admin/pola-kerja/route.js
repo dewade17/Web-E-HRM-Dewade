@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { parseDateTimeToUTC } from '@/helpers/date-helper';
 
 /**
  * Autentikasi: terima Bearer JWT atau NextAuth session.
@@ -28,8 +29,8 @@ function parseDateTime(value, field) {
   if (value === undefined || value === null || value === '') {
     throw new Error(`Field '${field}' wajib diisi.`);
   }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  const parsed = parseDateTimeToUTC(value);
+  if (!(parsed instanceof Date)) {
     throw new Error(`Field '${field}' harus berupa tanggal/waktu yang valid.`);
   }
   return parsed;
@@ -37,8 +38,8 @@ function parseDateTime(value, field) {
 
 function parseOptionalDateTime(value, field) {
   if (value === undefined || value === null || value === '') return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  const parsed = parseDateTimeToUTC(value);
+  if (!(parsed instanceof Date)) {
     throw new Error(`Field '${field}' harus berupa tanggal/waktu yang valid.`);
   }
   return parsed;
