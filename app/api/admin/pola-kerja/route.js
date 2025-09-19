@@ -3,6 +3,9 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 
+/**
+ * Autentikasi: terima Bearer JWT atau NextAuth session.
+ */
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -16,6 +19,11 @@ async function ensureAuth(req) {
   return true;
 }
 
+/**
+ * Helper parsing tanggal/waktu (wajib & opsional).
+ * Catatan: Node Date akan tersimpan sebagai UTC di driver, sementara kolom MySQL DATETIME
+ * tidak menyimpan zona waktu. Pastikan klien mengirim ISO dengan offset jelas bila perlu.
+ */
 function parseDateTime(value, field) {
   if (value === undefined || value === null || value === '') {
     throw new Error(`Field '${field}' wajib diisi.`);
@@ -36,18 +44,11 @@ function parseOptionalDateTime(value, field) {
   return parsed;
 }
 
-function parseOptionalInt(value, field) {
-  if (value === undefined || value === null || value === '') return null;
-  const n = Number(value);
-  if (!Number.isInteger(n)) {
-    throw new Error(`Field '${field}' harus berupa bilangan bulat.`);
-  }
-  if (n < 0) {
-    throw new Error(`Field '${field}' tidak boleh bernilai negatif.`);
-  }
-  return n;
-}
-
+/**
+ * GET /pola-kerja
+ * - pagination, pencarian, sorting
+ * - bisa sertakan yang deleted (soft delete) pakai ?includeDeleted=1
+ */
 export async function GET(req) {
   const ok = await ensureAuth(req);
   if (ok instanceof NextResponse) return ok;
@@ -106,6 +107,14 @@ export async function GET(req) {
   }
 }
 
+/**
+ * POST /pola-kerja
+ * Aturan:
+ * - 'nama_pola_kerja', 'jam_mulai', 'jam_selesai' wajib.
+ * - Jika salah satu jam istirahat diisi, keduanya wajib & harus berada di dalam jam kerja.
+ * - 'maks_jam_istirahat' TIDAK dibaca dari body: selalu dihitung otomatis
+ *   = selisih menit antara 'jam_istirahat_mulai' dan 'jam_istirahat_selesai'.
+ */
 export async function POST(req) {
   const ok = await ensureAuth(req);
   if (ok instanceof NextResponse) return ok;
@@ -117,7 +126,7 @@ export async function POST(req) {
       return NextResponse.json({ message: "Field 'nama_pola_kerja' wajib diisi." }, { status: 400 });
     }
 
-    // wajib
+    // Wajib: jam kerja
     let jamMulai;
     let jamSelesai;
     try {
@@ -130,34 +139,34 @@ export async function POST(req) {
       return NextResponse.json({ message: "Field 'jam_selesai' tidak boleh lebih awal dari 'jam_mulai'." }, { status: 400 });
     }
 
-    // opsional
+    // Opsional: jendela istirahat
     let istMulai = null;
     let istSelesai = null;
-    let maksIst = null;
     try {
       istMulai = parseOptionalDateTime(body.jam_istirahat_mulai, 'jam_istirahat_mulai');
       istSelesai = parseOptionalDateTime(body.jam_istirahat_selesai, 'jam_istirahat_selesai');
-      maksIst = parseOptionalInt(body.maks_jam_istirahat, 'maks_jam_istirahat');
     } catch (parseErr) {
       return NextResponse.json({ message: parseErr.message }, { status: 400 });
     }
 
-    // bila salah satu jam istirahat diisi, keduanya wajib
+    // Jika salah satu diisi, keduanya wajib
     if ((istMulai && !istSelesai) || (!istMulai && istSelesai)) {
       return NextResponse.json({ message: "Isi keduanya: 'jam_istirahat_mulai' dan 'jam_istirahat_selesai'." }, { status: 400 });
     }
-    // validasi rentang istirahat & berada dalam jam kerja
+
+    // Validasi jendela istirahat & perhitungan maks durasi (menit)
+    let computedMaksIstirahat = null; // menit
     if (istMulai && istSelesai) {
       if (istSelesai < istMulai) {
         return NextResponse.json({ message: "'jam_istirahat_selesai' tidak boleh lebih awal dari 'jam_istirahat_mulai'." }, { status: 400 });
       }
+      // rentang istirahat wajib di dalam jam kerja (inklusif)
       if (istMulai < jamMulai || istSelesai > jamSelesai) {
         return NextResponse.json({ message: 'Rentang istirahat harus berada di dalam jam kerja.' }, { status: 400 });
       }
-      const durMenit = Math.round((istSelesai.getTime() - istMulai.getTime()) / 60000);
-      if (maksIst != null && durMenit > maksIst) {
-        return NextResponse.json({ message: 'Durasi istirahat melebihi maks_jam_istirahat.' }, { status: 400 });
-      }
+      computedMaksIstirahat = Math.round((istSelesai.getTime() - istMulai.getTime()) / 60000);
+      // Di sini kita SENGAJA mengabaikan body.maks_jam_istirahat agar konsisten dengan definisi:
+      // maks_jam_istirahat = panjang rentang istirahat (menit).
     }
 
     const created = await db.polaKerja.create({
@@ -168,7 +177,7 @@ export async function POST(req) {
         // opsional
         jam_istirahat_mulai: istMulai,
         jam_istirahat_selesai: istSelesai,
-        maks_jam_istirahat: maksIst,
+        maks_jam_istirahat: computedMaksIstirahat,
       },
       select: {
         id_pola_kerja: true,

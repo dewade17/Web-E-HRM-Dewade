@@ -16,8 +16,13 @@ async function ensureAuth(req) {
   return true;
 }
 
+/**
+ * parseOptionalDate:
+ * - undefined  => field tidak dikirim (jangan ubah)
+ * - null / ''  => dianggap error (tidak boleh kosong) — menjaga kontrak lama
+ */
 function parseOptionalDate(value, field) {
-  if (value === undefined) return undefined; // artinya: tidak ingin mengubah
+  if (value === undefined) return undefined;
   if (value === null || value === '') {
     throw new Error(`Field '${field}' tidak boleh kosong.`);
   }
@@ -26,21 +31,6 @@ function parseOptionalDate(value, field) {
     throw new Error(`Field '${field}' harus berupa tanggal/waktu yang valid.`);
   }
   return parsed;
-}
-
-function parseOptionalInt(value, field) {
-  if (value === undefined) return undefined; // tidak ingin mengubah
-  if (value === null || value === '') {
-    throw new Error(`Field '${field}' tidak boleh kosong.`);
-  }
-  const n = Number(value);
-  if (!Number.isInteger(n)) {
-    throw new Error(`Field '${field}' harus berupa bilangan bulat.`);
-  }
-  if (n < 0) {
-    throw new Error(`Field '${field}' tidak boleh bernilai negatif.`);
-  }
-  return n;
 }
 
 export async function GET(_req, { params }) {
@@ -94,9 +84,9 @@ export async function PUT(req, { params }) {
     }
 
     const body = await req.json();
-
     const data = {};
-    // nama
+
+    // --- nama pola kerja (opsional, tapi kalau dikirim tidak boleh kosong) ---
     if (body.nama_pola_kerja !== undefined) {
       const nama = String(body.nama_pola_kerja).trim();
       if (!nama) {
@@ -105,7 +95,7 @@ export async function PUT(req, { params }) {
       data.nama_pola_kerja = nama;
     }
 
-    // start/end kerja (opsional, tapi harus valid jika dikirim)
+    // --- jam kerja (opsional; jika dikirim harus valid & urutan benar) ---
     let newJamMulai = existing.jam_mulai;
     let newJamSelesai = existing.jam_selesai;
     try {
@@ -127,10 +117,12 @@ export async function PUT(req, { params }) {
       return NextResponse.json({ message: "Field 'jam_selesai' tidak boleh lebih awal dari 'jam_mulai'." }, { status: 400 });
     }
 
-    // jam istirahat & maks (opsional)
+    // --- jam istirahat (opsional; kalau kirim salah satu harus kirim keduanya) ---
     let newIstMulai = existing.jam_istirahat_mulai;
     let newIstSelesai = existing.jam_istirahat_selesai;
-    let newMaksIst = existing.maks_jam_istirahat;
+
+    const istMulaiSent = Object.prototype.hasOwnProperty.call(body, 'jam_istirahat_mulai');
+    const istSelesaiSent = Object.prototype.hasOwnProperty.call(body, 'jam_istirahat_selesai');
 
     try {
       const parsedIstMulai = parseOptionalDate(body.jam_istirahat_mulai, 'jam_istirahat_mulai');
@@ -143,41 +135,44 @@ export async function PUT(req, { params }) {
         newIstSelesai = parsedIstSelesai;
         data.jam_istirahat_selesai = parsedIstSelesai;
       }
-
-      const parsedMaks = parseOptionalInt(body.maks_jam_istirahat, 'maks_jam_istirahat');
-      if (parsedMaks !== undefined) {
-        newMaksIst = parsedMaks;
-        data.maks_jam_istirahat = parsedMaks;
-      }
     } catch (parseErr) {
       return NextResponse.json({ message: parseErr.message }, { status: 400 });
     }
 
-    // Jika user hanya mengirim salah satu jam istirahat
-    const istMulaiSent = body.hasOwnProperty('jam_istirahat_mulai');
-    const istSelesaiSent = body.hasOwnProperty('jam_istirahat_selesai');
+    // Larang kirim salah satu tanpa pasangannya
     if ((istMulaiSent && !istSelesaiSent) || (!istMulaiSent && istSelesaiSent)) {
       return NextResponse.json({ message: "Isi keduanya: 'jam_istirahat_mulai' dan 'jam_istirahat_selesai'." }, { status: 400 });
     }
 
-    // Validasi konsistensi istirahat jika salah satu field istirahat ada di payload
-    if (istMulaiSent || istSelesaiSent || body.hasOwnProperty('maks_jam_istirahat') || body.hasOwnProperty('jam_mulai') || body.hasOwnProperty('jam_selesai')) {
+    // Perlu validasi konsistensi jika jam kerja berubah atau jam istirahat berubah
+    const jamKerjaBerubah = body.hasOwnProperty('jam_mulai') || body.hasOwnProperty('jam_selesai');
+    const jamIstirahatBerubah = istMulaiSent || istSelesaiSent;
+
+    if (jamKerjaBerubah || jamIstirahatBerubah) {
       if ((newIstMulai && !newIstSelesai) || (!newIstMulai && newIstSelesai)) {
         return NextResponse.json({ message: "Isi keduanya: 'jam_istirahat_mulai' dan 'jam_istirahat_selesai'." }, { status: 400 });
       }
+
+      if (newIstMulai && newIstSelesai) {
+        // istirahat harus di dalam jam kerja
+        if (newIstMulai < newJamMulai || newIstSelesai > newJamSelesai) {
+          return NextResponse.json({ message: 'Rentang istirahat harus berada di dalam jam kerja.' }, { status: 400 });
+        }
+      }
+    }
+
+    // === Inti perubahan: abaikan body.maks_jam_istirahat, selalu HITUNG otomatis ===
+    // Hanya set kolom maks_jam_istirahat ketika payload mengubah jendela istirahat.
+    if (jamIstirahatBerubah) {
       if (newIstMulai && newIstSelesai) {
         if (newIstSelesai < newIstMulai) {
           return NextResponse.json({ message: "'jam_istirahat_selesai' tidak boleh lebih awal dari 'jam_istirahat_mulai'." }, { status: 400 });
         }
-        if (newIstMulai < newJamMulai || newIstSelesai > newJamSelesai) {
-          return NextResponse.json({ message: 'Rentang istirahat harus berada di dalam jam kerja.' }, { status: 400 });
-        }
-        if (newMaksIst != null) {
-          const durMenit = Math.round((newIstSelesai.getTime() - newIstMulai.getTime()) / 60000);
-          if (durMenit > newMaksIst) {
-            return NextResponse.json({ message: 'Durasi istirahat melebihi maks_jam_istirahat.' }, { status: 400 });
-          }
-        }
+        const computedMaksMenit = Math.round((newIstSelesai.getTime() - newIstMulai.getTime()) / 60000);
+        data.maks_jam_istirahat = computedMaksMenit;
+      } else {
+        // kalau keduanya tidak dikirim (atau dikirim tapi invalid sudah ditangani),
+        // kita tidak menyentuh kolom maks_jam_istirahat
       }
     }
 
