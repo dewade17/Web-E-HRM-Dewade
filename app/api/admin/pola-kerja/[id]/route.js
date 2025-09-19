@@ -33,6 +33,23 @@ function parseOptionalDate(value, field) {
   return parsed;
 }
 
+/**
+ * parseOptionalIntMinutes:
+ * - undefined => field tidak dikirim
+ * - nol/positif integer dalam menit
+ */
+function parseOptionalIntMinutes(value, field) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') {
+    throw new Error(`Field '${field}' tidak boleh kosong.`);
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+    throw new Error(`Field '${field}' harus berupa bilangan bulat menit >= 0.`);
+  }
+  return n;
+}
+
 export async function GET(_req, { params }) {
   try {
     const { id } = params;
@@ -158,21 +175,67 @@ export async function PUT(req, { params }) {
         if (newIstMulai < newJamMulai || newIstSelesai > newJamSelesai) {
           return NextResponse.json({ message: 'Rentang istirahat harus berada di dalam jam kerja.' }, { status: 400 });
         }
-      }
-    }
-
-    // === Inti perubahan: abaikan body.maks_jam_istirahat, selalu HITUNG otomatis ===
-    // Hanya set kolom maks_jam_istirahat ketika payload mengubah jendela istirahat.
-    if (jamIstirahatBerubah) {
-      if (newIstMulai && newIstSelesai) {
+        // urutan window
         if (newIstSelesai < newIstMulai) {
           return NextResponse.json({ message: "'jam_istirahat_selesai' tidak boleh lebih awal dari 'jam_istirahat_mulai'." }, { status: 400 });
         }
-        const computedMaksMenit = Math.round((newIstSelesai.getTime() - newIstMulai.getTime()) / 60000);
-        data.maks_jam_istirahat = computedMaksMenit;
-      } else {
-        // kalau keduanya tidak dikirim (atau dikirim tapi invalid sudah ditangani),
-        // kita tidak menyentuh kolom maks_jam_istirahat
+      }
+    }
+
+    // --- maks_jam_istirahat (opsional & independent) ---
+    let newMaks = existing.maks_jam_istirahat;
+    try {
+      const parsedMaks = parseOptionalIntMinutes(body.maks_jam_istirahat, 'maks_jam_istirahat');
+      if (parsedMaks !== undefined) {
+        newMaks = parsedMaks;
+        data.maks_jam_istirahat = parsedMaks;
+      }
+    } catch (parseErr) {
+      return NextResponse.json({ message: parseErr.message }, { status: 400 });
+    }
+
+    // --- Validasi relasi MAX vs WINDOW bila window tersedia (existing atau baru) ---
+    const effIstMulai = newIstMulai ?? existing.jam_istirahat_mulai;
+    const effIstSelesai = newIstSelesai ?? existing.jam_istirahat_selesai;
+    const windowAda = !!(effIstMulai && effIstSelesai);
+
+    // Jika ingin set MAX tapi window belum ada => tolak (supaya aturan bisnis jelas)
+    if (!windowAda && body.maks_jam_istirahat !== undefined) {
+      return NextResponse.json(
+        {
+          message: "Tidak bisa set 'maks_jam_istirahat' tanpa window istirahat. Set 'jam_istirahat_mulai' & 'jam_istirahat_selesai' terlebih dahulu.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // Jika window ada, batasi 0 ≤ MAX ≤ durasi window (menit)
+    if (windowAda) {
+      const windowDurasiMenit = Math.round((effIstSelesai.getTime() - effIstMulai.getTime()) / 60000);
+      if (windowDurasiMenit < 0) {
+        return NextResponse.json({ message: 'Rentang istirahat tidak valid.' }, { status: 400 });
+      }
+
+      // 1) Ketika user mengirim MAX baru, cek ≤ window
+      if (body.maks_jam_istirahat !== undefined && newMaks > windowDurasiMenit) {
+        return NextResponse.json(
+          {
+            message: `'maks_jam_istirahat' (${newMaks} menit) tidak boleh melebihi durasi window istirahat (${windowDurasiMenit} menit).`,
+          },
+          { status: 400 }
+        );
+      }
+
+      // 2) Ketika window diubah tapi MAX tidak dikirim, pastikan MAX lama masih valid
+      if (jamIstirahatBerubah && body.maks_jam_istirahat === undefined && existing.maks_jam_istirahat != null) {
+        if (existing.maks_jam_istirahat > windowDurasiMenit) {
+          return NextResponse.json(
+            {
+              message: `Window istirahat baru hanya ${windowDurasiMenit} menit, sedangkan 'maks_jam_istirahat' lama ${existing.maks_jam_istirahat} menit. Kirim 'maks_jam_istirahat' yang baru (≤ ${windowDurasiMenit}).`,
+            },
+            { status: 400 }
+          );
+        }
       }
     }
 
