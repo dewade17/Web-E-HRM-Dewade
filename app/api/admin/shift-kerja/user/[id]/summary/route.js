@@ -57,6 +57,12 @@ function buildDateFilter(searchParams, field) {
   return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
+function clampLimit(raw) {
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed)) return 50;
+  return Math.min(Math.max(parsed, 1), 200);
+}
+
 export async function GET(req) {
   const ok = await ensureAuth(req);
   if (ok instanceof NextResponse) return ok;
@@ -65,42 +71,42 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const includeDeleted = searchParams.get('includeDeleted') === '1';
 
-    const where = {
+    const baseWhere = {
       ...(includeDeleted ? {} : { deleted_at: null }),
     };
 
     const idUser = (searchParams.get('id_user') || '').trim();
     if (idUser) {
-      where.id_user = idUser;
+      baseWhere.id_user = idUser;
     }
 
     const idPolaKerjaRaw = searchParams.get('id_pola_kerja');
     if (idPolaKerjaRaw !== null) {
       const trimmed = idPolaKerjaRaw.trim();
       if (trimmed === 'null') {
-        where.id_pola_kerja = null;
+        baseWhere.id_pola_kerja = null;
       } else if (trimmed) {
-        where.id_pola_kerja = trimmed;
+        baseWhere.id_pola_kerja = trimmed;
       }
     }
-
     const status = (searchParams.get('status') || '').trim();
+    let statusFilter = 'KERJA';
     if (status) {
       const normalized = status.toUpperCase();
       if (!SHIFT_STATUS.includes(normalized)) {
         return NextResponse.json({ message: "Parameter 'status' tidak valid." }, { status: 400 });
       }
-      where.status = normalized;
+      statusFilter = normalized;
     }
 
     const tanggalMulaiFilter = buildDateFilter(searchParams, 'tanggalMulai');
     if (tanggalMulaiFilter) {
-      where.tanggal_mulai = tanggalMulaiFilter;
+      baseWhere.tanggal_mulai = tanggalMulaiFilter;
     }
 
     const tanggalSelesaiFilter = buildDateFilter(searchParams, 'tanggalSelesai');
     if (tanggalSelesaiFilter) {
-      where.tanggal_selesai = tanggalSelesaiFilter;
+      baseWhere.tanggal_selesai = tanggalSelesaiFilter;
     }
 
     const dateParam = searchParams.get('date');
@@ -111,43 +117,75 @@ export async function GET(req) {
       return NextResponse.json({ message: err.message }, { status: 400 });
     }
 
-    const [total, groupedStatus] = await Promise.all([
-      db.shiftKerja.count({ where }),
-      db.shiftKerja.groupBy({
-        by: ['status'],
-        where,
-        _count: { _all: true },
-      }),
-    ]);
+    const limit = clampLimit(searchParams.get('limit') || '50');
+    const sortDirection = (searchParams.get('sort') || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc';
+
+    const overlapConditions = [{ OR: [{ tanggal_mulai: null }, { tanggal_mulai: { lte: targetDate } }] }, { OR: [{ tanggal_selesai: null }, { tanggal_selesai: { gte: targetDate } }] }];
+
+    const existingAnd = Array.isArray(baseWhere.AND) ? [...baseWhere.AND] : [];
+    const datasetWhere = {
+      ...baseWhere,
+      status: statusFilter,
+      AND: [...existingAnd, ...overlapConditions],
+    };
+
+    const data = await db.shiftKerja.findMany({
+      where: datasetWhere,
+      orderBy: [{ tanggal_mulai: sortDirection }, { updated_at: 'desc' }],
+      take: limit,
+      select: {
+        id_shift_kerja: true,
+        id_user: true,
+        tanggal_mulai: true,
+        tanggal_selesai: true,
+        hari_kerja: true,
+        status: true,
+        id_pola_kerja: true,
+        created_at: true,
+        updated_at: true,
+        deleted_at: true,
+        user: {
+          select: {
+            id_user: true,
+            nama_pengguna: true,
+            email: true,
+          },
+        },
+        polaKerja: {
+          select: {
+            id_pola_kerja: true,
+            nama_pola_kerja: true,
+            jam_mulai: true,
+            jam_selesai: true,
+            jam_istirahat_mulai: true,
+            jam_istirahat_selesai: true,
+            maks_jam_istirahat: true,
+          },
+        },
+      },
+    });
+
+    const total = data.length;
 
     const statusCounts = SHIFT_STATUS.reduce((acc, key) => ({ ...acc, [key]: 0 }), {});
 
-    for (const item of groupedStatus) {
-      statusCounts[item.status] = item._count._all;
+    for (const item of data) {
+      statusCounts[item.status] = (statusCounts[item.status] || 0) + 1;
     }
-
-    let activeCount = 0;
-    if (!where.status || where.status === 'KERJA') {
-      const baseAnd = [{ OR: [{ tanggal_mulai: null }, { tanggal_mulai: { lte: targetDate } }] }, { OR: [{ tanggal_selesai: null }, { tanggal_selesai: { gte: targetDate } }] }];
-
-      const activeWhere = {
-        ...where,
-        status: 'KERJA',
-        AND: baseAnd,
-      };
-
-      activeCount = await db.shiftKerja.count({ where: activeWhere });
-    }
+    const activeDate = targetDate.toISOString().slice(0, 10);
 
     return NextResponse.json({
       summary: {
         total,
         status: statusCounts,
         activeOn: {
-          date: targetDate.toISOString().slice(0, 10),
-          total: activeCount,
+          date: activeDate,
+          total,
         },
       },
+      date: activeDate,
+      total,
+      data,
     });
   } catch (err) {
     if (err instanceof Error && err.message.includes('tanggal')) {
