@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
-import { parseDateTimeToUTC } from '@/helpers/date-helper';
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -21,11 +20,32 @@ function parseDateTime(value, field) {
   if (value === undefined || value === null || value === '') {
     throw new Error(`Field '${field}' wajib diisi.`);
   }
-  const parsed = parseDateTimeToUTC(value);
-  if (!(parsed instanceof Date)) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
     throw new Error(`Field '${field}' harus berupa tanggal/waktu yang valid.`);
   }
   return parsed;
+}
+
+function parseOptionalDateTime(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Field '${field}' harus berupa tanggal/waktu yang valid.`);
+  }
+  return parsed;
+}
+
+function parseOptionalInt(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isInteger(n)) {
+    throw new Error(`Field '${field}' harus berupa bilangan bulat.`);
+  }
+  if (n < 0) {
+    throw new Error(`Field '${field}' tidak boleh bernilai negatif.`);
+  }
+  return n;
 }
 
 export async function GET(req) {
@@ -39,7 +59,7 @@ export async function GET(req) {
     const search = (searchParams.get('search') || '').trim();
     const includeDeleted = searchParams.get('includeDeleted') === '1';
 
-    const allowedOrder = new Set(['nama_pola_kerja', 'jam_mulai', 'jam_selesai', 'created_at', 'updated_at', 'deleted_at']);
+    const allowedOrder = new Set(['nama_pola_kerja', 'jam_mulai', 'jam_selesai', 'jam_istirahat_mulai', 'jam_istirahat_selesai', 'maks_jam_istirahat', 'created_at', 'updated_at', 'deleted_at']);
     const orderByParam = (searchParams.get('orderBy') || 'created_at').trim();
     const orderByField = allowedOrder.has(orderByParam) ? orderByParam : 'created_at';
     const sort = (searchParams.get('sort') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
@@ -61,6 +81,9 @@ export async function GET(req) {
           nama_pola_kerja: true,
           jam_mulai: true,
           jam_selesai: true,
+          jam_istirahat_mulai: true,
+          jam_istirahat_selesai: true,
+          maks_jam_istirahat: true,
           created_at: true,
           updated_at: true,
           deleted_at: true,
@@ -94,6 +117,7 @@ export async function POST(req) {
       return NextResponse.json({ message: "Field 'nama_pola_kerja' wajib diisi." }, { status: 400 });
     }
 
+    // wajib
     let jamMulai;
     let jamSelesai;
     try {
@@ -102,9 +126,38 @@ export async function POST(req) {
     } catch (parseErr) {
       return NextResponse.json({ message: parseErr.message }, { status: 400 });
     }
-
     if (jamSelesai < jamMulai) {
       return NextResponse.json({ message: "Field 'jam_selesai' tidak boleh lebih awal dari 'jam_mulai'." }, { status: 400 });
+    }
+
+    // opsional
+    let istMulai = null;
+    let istSelesai = null;
+    let maksIst = null;
+    try {
+      istMulai = parseOptionalDateTime(body.jam_istirahat_mulai, 'jam_istirahat_mulai');
+      istSelesai = parseOptionalDateTime(body.jam_istirahat_selesai, 'jam_istirahat_selesai');
+      maksIst = parseOptionalInt(body.maks_jam_istirahat, 'maks_jam_istirahat');
+    } catch (parseErr) {
+      return NextResponse.json({ message: parseErr.message }, { status: 400 });
+    }
+
+    // bila salah satu jam istirahat diisi, keduanya wajib
+    if ((istMulai && !istSelesai) || (!istMulai && istSelesai)) {
+      return NextResponse.json({ message: "Isi keduanya: 'jam_istirahat_mulai' dan 'jam_istirahat_selesai'." }, { status: 400 });
+    }
+    // validasi rentang istirahat & berada dalam jam kerja
+    if (istMulai && istSelesai) {
+      if (istSelesai < istMulai) {
+        return NextResponse.json({ message: "'jam_istirahat_selesai' tidak boleh lebih awal dari 'jam_istirahat_mulai'." }, { status: 400 });
+      }
+      if (istMulai < jamMulai || istSelesai > jamSelesai) {
+        return NextResponse.json({ message: 'Rentang istirahat harus berada di dalam jam kerja.' }, { status: 400 });
+      }
+      const durMenit = Math.round((istSelesai.getTime() - istMulai.getTime()) / 60000);
+      if (maksIst != null && durMenit > maksIst) {
+        return NextResponse.json({ message: 'Durasi istirahat melebihi maks_jam_istirahat.' }, { status: 400 });
+      }
     }
 
     const created = await db.polaKerja.create({
@@ -112,12 +165,19 @@ export async function POST(req) {
         nama_pola_kerja: nama,
         jam_mulai: jamMulai,
         jam_selesai: jamSelesai,
+        // opsional
+        jam_istirahat_mulai: istMulai,
+        jam_istirahat_selesai: istSelesai,
+        maks_jam_istirahat: maksIst,
       },
       select: {
         id_pola_kerja: true,
         nama_pola_kerja: true,
         jam_mulai: true,
         jam_selesai: true,
+        jam_istirahat_mulai: true,
+        jam_istirahat_selesai: true,
+        maks_jam_istirahat: true,
         created_at: true,
       },
     });
