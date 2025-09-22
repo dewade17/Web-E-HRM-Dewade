@@ -1,42 +1,32 @@
 import { NextResponse } from 'next/server';
-import jwt from 'jsonwebtoken';
+import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 
 const REPORT_STATUSES = new Set(['terkirim', 'disetujui', 'ditolak']);
 
-function getClaimsFromRequest(req) {
+async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
-  if (!auth.startsWith('Bearer ')) {
-    const err = new Error('Token tidak ditemukan');
-    err.status = 401;
-    throw err;
-  }
-
-  const token = auth.slice(7).trim();
-  try {
-    return verifyAuthToken(token);
-  } catch (error) {
-    if (error instanceof jwt.TokenExpiredError) {
-      const err = new Error('Token sudah kedaluwarsa');
-      err.status = 401;
-      throw err;
+  if (auth.startsWith('Bearer ')) {
+    try {
+      const claims = verifyAuthToken(auth.slice(7));
+      return { claims };
+    } catch (_) {
+      /* fallback ke NextAuth */
     }
-    if (error instanceof jwt.JsonWebTokenError) {
-      const err = new Error('Token tidak valid');
-      err.status = 401;
-      throw err;
-    }
-    const err = new Error('Gagal memverifikasi token');
-    err.status = 500;
-    throw err;
   }
+  const sessionOrRes = await authenticateRequest();
+  if (sessionOrRes instanceof NextResponse) return sessionOrRes; // unauthorized
+  return { session: sessionOrRes };
 }
 
 export async function GET(req) {
+  const auth = await ensureAuth(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
-    const claims = getClaimsFromRequest(req);
-    const actorId = claims?.sub || claims?.id_user;
+    const { claims, session } = auth;
+    const actorId = claims?.sub || claims?.id_user || claims?.userId || claims?.id || session?.user?.id || session?.user?.id_user;
 
     if (!actorId) {
       return NextResponse.json({ message: 'Payload token tidak sesuai' }, { status: 401 });

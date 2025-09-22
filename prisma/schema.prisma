@@ -229,7 +229,7 @@ model ShiftKerja {
   @@map("shift_kerja")
 }
 
-/* ====== REVISI: Pecah menjadi AGENDA (master) & AGENDA_KERJA (detail) ====== */
+/* ====== AGENDA (master) & AGENDA_KERJA (detail) ====== */
 
 model Agenda {
   id_agenda   String   @id @default(uuid()) @db.Char(36)
@@ -271,21 +271,69 @@ model AgendaKerja {
   @@map("agenda_kerja")
 }
 
+/* ====== KUNJUNGAN (master) & KUNJUNGAN_REPORT_RECIPIENTS (detail notifikasi/report) ====== */
+
+model Kunjungan {
+  id_kunjungan String    @id @default(uuid()) @db.Char(36)
+  id_user      String    @db.Char(36)
+
+  tanggal      DateTime? @db.Date
+  jam_mulai    DateTime? @db.DateTime(0)
+  jam_selesai  DateTime? @db.DateTime(0)
+
+  deskripsi    String?   @db.LongText
+  lokasi       String?   @db.LongText
+
+  created_at   DateTime  @default(now()) @db.DateTime(0)
+  updated_at   DateTime  @updatedAt @db.DateTime(0)
+  deleted_at   DateTime? @db.DateTime(0)
+
+  user    User                         @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  reports KunjunganReportRecipient[]
+
+  @@index([id_user, tanggal])
+  @@map("kunjungan")
+}
+
+model KunjunganReportRecipient {
+  id_kunjungan_report_recipient String       @id @default(uuid()) @db.Char(36)
+  id_kunjungan                  String       @db.Char(36)
+  id_user                       String       @db.Char(36)
+  recipient_role_snapshot       AtasanRole?
+  catatan                       String?      @db.LongText
+  status                        ReportStatus @default(terkirim)
+  notified_at                   DateTime?    @db.DateTime(0)
+  read_at                       DateTime?    @db.DateTime(0)
+  acted_at                      DateTime?    @db.DateTime(0)
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  kunjungan Kunjungan @relation(fields: [id_kunjungan], references: [id_kunjungan], onDelete: Cascade, onUpdate: Cascade)
+  recipient User      @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_kunjungan])
+  @@index([id_user])
+  @@unique([id_kunjungan, id_user])
+  @@map("kunjungan_report_recipients")
+}
+
 model User {
-  id_user                   String    @id @default(uuid()) @db.Char(36)
-  nama_pengguna             String    @db.VarChar(255)
-  email                     String    @unique @db.VarChar(255)
-  password_hash             String    @db.VarChar(255)
-  kontak                    String?   @db.VarChar(32)
-  password_updated_at       DateTime? @db.DateTime(0)
-  agama                     String?   @db.VarChar(32)
-  foto_profil_user          String?   @db.LongText
-  tanggal_lahir             DateTime? @db.Date
-  role                      Role
-  id_departement            String?   @db.Char(36)
-  id_location               String?   @db.Char(36)
-  reset_password_token      String?   @db.VarChar(255)
-  reset_password_expires_at DateTime? @db.DateTime(0)
+  id_user                    String    @id @default(uuid()) @db.Char(36)
+  nama_pengguna              String    @db.VarChar(255)
+  email                      String    @unique @db.VarChar(255)
+  password_hash              String    @db.VarChar(255)
+  kontak                     String?   @db.VarChar(32)
+  password_updated_at        DateTime? @db.DateTime(0)
+  agama                      String?   @db.VarChar(32)
+  foto_profil_user           String?   @db.LongText
+  tanggal_lahir              DateTime? @db.Date
+  role                       Role
+  id_departement             String?   @db.Char(36)
+  id_location                String?   @db.Char(36)
+  reset_password_token       String?   @db.VarChar(255)
+  reset_password_expires_at  DateTime? @db.DateTime(0)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -294,20 +342,23 @@ model User {
   departement Departement? @relation(fields: [id_departement], references: [id_departement], onDelete: SetNull, onUpdate: Cascade)
   kantor      Location?    @relation(fields: [id_location], references: [id_location], onDelete: Restrict, onUpdate: Cascade)
 
-  faces              Face[]
-  agendas            AgendaKerja[]
-  cuti               Cuti[]
-  shifts             ShiftKerja[]
-  story_planners     StoryPlanner[]
-  absensi            Absensi[]
-  lembur             Lembur[]
-  shift_piket        ShiftPiket[]
-  shift_storyPlanner ShiftStoryPlanner[]
-  broadcast_rcv      BroadcastRecipient[]
-  devices            Device[]
-  cuti_approvals     CutiApproval[]     @relation("CutiApproval_approver_user_idToUser")
-  lembur_approvals   LemburApproval[]   @relation("LemburApproval_approver_user_idToUser")
-  absensi_reports_received AbsensiReportRecipient[]
+  faces                      Face[]
+  agendas                    AgendaKerja[]
+  cuti                       Cuti[]
+  shifts                     ShiftKerja[]
+  story_planners             StoryPlanner[]
+  absensi                    Absensi[]
+  lembur                     Lembur[]
+  shift_piket                ShiftPiket[]
+  shift_storyPlanner         ShiftStoryPlanner[]
+  broadcast_rcv              BroadcastRecipient[]
+  devices                    Device[]
+  cuti_approvals             CutiApproval[]          @relation("CutiApproval_approver_user_idToUser")
+  lembur_approvals           LemburApproval[]        @relation("LemburApproval_approver_user_idToUser")
+  absensi_reports_received   AbsensiReportRecipient[]
+  // Kunjungan
+  kunjungan                  Kunjungan[]
+  kunjungan_reports_received KunjunganReportRecipient[]
 
   // in-app notifications
   notifications Notification[]
@@ -396,7 +447,10 @@ model Absensi {
   id_lokasi_datang     String?       @db.Char(36)
   jam_masuk            DateTime?     @db.DateTime(0)
   jam_pulang           DateTime?     @db.DateTime(0)
-  status               AbsensiStatus
+
+  // DIPISAH: status masuk & pulang
+  status_masuk         AbsensiStatus?
+  status_pulang        AbsensiStatus?
 
   in_latitude   Decimal? @db.Decimal(10, 6)
   in_longitude  Decimal? @db.Decimal(10, 6)
@@ -419,6 +473,71 @@ model Absensi {
   @@index([id_lokasi_datang])
   @@index([id_lokasi_pulang])
   @@map("Absensi")
+}
+
+model AbsensiReportRecipient {
+  id_absensi_report_recipient String       @id @default(uuid()) @db.Char(36)
+  id_absensi                  String       @db.Char(36)
+  id_user                     String       @db.Char(36)
+  recipient_role_snapshot     AtasanRole?
+  catatan                     String?      @db.LongText
+  status                      ReportStatus @default(terkirim)
+  notified_at                 DateTime?    @db.DateTime(0)
+  read_at                     DateTime?    @db.DateTime(0)
+  acted_at                    DateTime?    @db.DateTime(0)
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  absensi   Absensi @relation(fields: [id_absensi], references: [id_absensi], onDelete: Cascade, onUpdate: Cascade)
+  recipient User    @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([id_absensi])
+  @@index([id_user])
+  @@unique([id_absensi, id_user])
+  @@map("absensi_report_recipients")
+}
+
+/// ====== Catatan Absensi ======
+model Catatan {
+  id_catatan        String   @id @default(uuid()) @db.Char(36)
+  id_absensi        String   @db.Char(36)
+  deskripsi_catatan String   @db.LongText
+  lampiran_url      String?  @db.LongText
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  absensi Absensi @relation(fields: [id_absensi], references: [id_absensi], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([id_absensi])
+  @@map("catatan")
+}
+
+/// ====== In-app Notifications ======
+model Notification {
+  id_notification String   @id @default(uuid()) @db.Char(36)
+  id_user         String   @db.Char(36)
+  title           String   @db.VarChar(255)
+  body            String   @db.LongText
+  data_json       String?  @db.LongText
+  related_table   String?  @db.VarChar(64)
+  related_id      String?  @db.Char(36)
+  status          NotificationStatus @default(unread)
+  seen_at         DateTime? @db.DateTime(0)
+  read_at         DateTime? @db.DateTime(0)
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  recipient User @relation(fields: [id_user], references: [id_user], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([id_user, status, created_at])
+  @@index([related_table, related_id])
+  @@map("notifications")
 }
 
 model Lembur {
@@ -529,69 +648,4 @@ model ShiftStoryPlanner {
   @@index([id_jadwal_story_planner])
   @@index([id_user])
   @@map("shift_story_planer")
-}
-
-model AbsensiReportRecipient {
-  id_absensi_report_recipient String       @id @default(uuid()) @db.Char(36)
-  id_absensi                  String       @db.Char(36)
-  id_user                     String       @db.Char(36)
-  recipient_role_snapshot     AtasanRole?
-  catatan                     String?      @db.LongText
-  status                      ReportStatus @default(terkirim)
-  notified_at                 DateTime?    @db.DateTime(0)
-  read_at                     DateTime?    @db.DateTime(0)
-  acted_at                    DateTime?    @db.DateTime(0)
-
-  created_at DateTime  @default(now()) @db.DateTime(0)
-  updated_at DateTime  @updatedAt @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
-
-  absensi   Absensi @relation(fields: [id_absensi], references: [id_absensi], onDelete: Cascade, onUpdate: Cascade)
-  recipient User    @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
-
-  @@index([id_absensi])
-  @@index([id_user])
-  @@unique([id_absensi, id_user])
-  @@map("absensi_report_recipients")
-}
-
-/// ====== Catatan Absensi ======
-model Catatan {
-  id_catatan        String   @id @default(uuid()) @db.Char(36)
-  id_absensi        String   @db.Char(36)
-  deskripsi_catatan String   @db.LongText
-  lampiran_url      String?  @db.LongText
-
-  created_at DateTime  @default(now()) @db.DateTime(0)
-  updated_at DateTime  @updatedAt @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
-
-  absensi Absensi @relation(fields: [id_absensi], references: [id_absensi], onDelete: Cascade, onUpdate: Cascade)
-
-  @@index([id_absensi])
-  @@map("catatan")
-}
-
-/// ====== In-app Notifications ======
-model Notification {
-  id_notification String   @id @default(uuid()) @db.Char(36)
-  id_user         String   @db.Char(36)
-  title           String   @db.VarChar(255)
-  body            String   @db.LongText
-  data_json       String?  @db.LongText
-  related_table   String?  @db.VarChar(64)
-  related_id      String?  @db.Char(36)
-  status          NotificationStatus @default(unread)
-  seen_at         DateTime? @db.DateTime(0)
-  read_at         DateTime? @db.DateTime(0)
-
-  created_at DateTime  @default(now()) @db.DateTime(0)
-  updated_at DateTime  @updatedAt @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
-
-  recipient User @relation(fields: [id_user], references: [id_user], onDelete: Cascade, onUpdate: Cascade)
-
-  @@index([id_user, status, created_at])
-  @@index([related_table, related_id])
-  @@map("notifications")
 }
