@@ -10,8 +10,8 @@ export async function POST(req) {
   try {
     const body = await req.json();
 
-    // Wajib: nama_pengguna, email, password, id_departement, id_location
-    const required = ['nama_pengguna', 'email', 'password', 'id_departement', 'id_location'];
+    // Wajib: nama_pengguna, email, password
+    const required = ['nama_pengguna', 'email', 'password'];
     for (const key of required) {
       const val = body[key];
       if (val == null || String(val).trim() === '') {
@@ -27,17 +27,23 @@ export async function POST(req) {
       return NextResponse.json({ message: 'Email sudah terdaftar.' }, { status: 409 });
     }
 
-    // Validasi: departement & location HARUS ada dan valid
-    const deptId = String(body.id_departement).trim();
-    const locId = String(body.id_location).trim();
-
-    const [dept, loc] = await Promise.all([db.departement.findUnique({ where: { id_departement: deptId } }), db.location.findUnique({ where: { id_location: locId } })]);
-
-    if (!dept) {
-      return NextResponse.json({ message: 'Departement tidak ditemukan.' }, { status: 400 });
+    // Validasi opsional: departement & location hanya dicek jika dikirimkan
+    let deptId = null;
+    if (body.id_departement != null && String(body.id_departement).trim() !== '') {
+      deptId = String(body.id_departement).trim();
+      const dept = await db.departement.findUnique({ where: { id_departement: deptId } });
+      if (!dept) {
+        return NextResponse.json({ message: 'Departement tidak ditemukan.' }, { status: 400 });
+      }
     }
-    if (!loc) {
-      return NextResponse.json({ message: 'Location/kantor tidak ditemukan.' }, { status: 400 });
+
+    let locId = null;
+    if (body.id_location != null && String(body.id_location).trim() !== '') {
+      locId = String(body.id_location).trim();
+      const loc = await db.location.findUnique({ where: { id_location: locId } });
+      if (!loc) {
+        return NextResponse.json({ message: 'Location/kantor tidak ditemukan.' }, { status: 400 });
+      }
     }
 
     // Hash password
@@ -68,8 +74,8 @@ export async function POST(req) {
         tanggal_lahir,
         agama,
         role,
-        id_departement: deptId,
-        id_location: locId,
+        ...(deptId ? { id_departement: deptId } : {}),
+        ...(locId ? { id_location: locId } : {}),
         password_updated_at: new Date(),
       },
       select: {
@@ -90,7 +96,3 @@ export async function POST(req) {
     return NextResponse.json({ message: msg }, { status: 500 });
   }
 }
-
-// export async function GET() {
-//   return NextResponse.json({ message: 'Method Not Allowed' }, { status: 405 });
-// }
