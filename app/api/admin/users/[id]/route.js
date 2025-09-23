@@ -5,7 +5,7 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { createClient } from '@supabase/supabase-js';
-import { parseDateOnlyToUTC } from '@/helpers/date-helper';
+import { JENIS_KELAMIN_VALUES, STATUS_KERJA_VALUES, normalizeNullableEnum, normalizeNullableInt, normalizeNullableString, normalizeOptionalDate } from '@/app/api/_utils/user-field-normalizer';
 
 // ===== Helpers: Auth (Admin) =====
 async function getAdminActor(req) {
@@ -107,13 +107,36 @@ export async function GET(_req, { params }) {
         agama: true,
         foto_profil_user: true,
         tanggal_lahir: true,
+        tempat_lahir: true,
+        jenis_kelamin: true,
+        golongan_darah: true,
+        status_perkawinan: true,
+        alamat_ktp: true,
+        alamat_ktp_provinsi: true,
+        alamat_ktp_kota: true,
+        alamat_domisili: true,
+        alamat_domisili_provinsi: true,
+        alamat_domisili_kota: true,
+        zona_waktu: true,
+        jenjang_pendidikan: true,
+        jurusan: true,
+        nama_institusi_pendidikan: true,
+        tahun_lulus: true,
+        nomor_induk_karyawan: true,
+        divisi: true,
         role: true,
         id_departement: true,
         id_location: true,
+        id_jabatan: true,
+        status_kerja: true,
+        tanggal_mulai_bekerja: true,
+        nomor_rekening: true,
+        jenis_bank: true,
         created_at: true,
         updated_at: true,
         departement: { select: { id_departement: true, nama_departement: true } },
         kantor: { select: { id_location: true, nama_kantor: true } },
+        jabatan: { select: { id_jabatan: true, nama_jabatan: true } },
       },
     });
     if (!user) return NextResponse.json({ message: 'User tidak ditemukan' }, { status: 404 });
@@ -124,6 +147,7 @@ export async function GET(_req, { params }) {
   }
 }
 
+// ===== PUT (HR only) : boleh ubah dept/location/role =====
 // ===== PUT (HR only) : boleh ubah dept/location/role =====
 export async function PUT(req, { params }) {
   const actor = await getAdminActor(req);
@@ -145,20 +169,47 @@ export async function PUT(req, { params }) {
 
     const wantsRemove = body.remove_foto === true || body.remove_foto === 'true';
 
-    let tanggalLahirValue;
-    if (body.tanggal_lahir !== undefined) {
-      if (body.tanggal_lahir === null) {
-        tanggalLahirValue = null;
-      } else if (typeof body.tanggal_lahir === 'string' && body.tanggal_lahir.trim() === '') {
-        tanggalLahirValue = null;
-      } else {
-        const parsedTanggal = parseDateOnlyToUTC(body.tanggal_lahir);
-        if (!(parsedTanggal instanceof Date)) {
-          return NextResponse.json({ message: "Field 'tanggal_lahir' harus berupa tanggal yang valid." }, { status: 400 });
-        }
-        tanggalLahirValue = parsedTanggal;
-      }
+    const { value: tanggalLahirValue, error: tanggalLahirError } = normalizeOptionalDate(body.tanggal_lahir, 'tanggal_lahir');
+    if (tanggalLahirError) {
+      return NextResponse.json({ message: tanggalLahirError }, { status: 400 });
     }
+    const { value: tanggalMulaiValue, error: tanggalMulaiError } = normalizeOptionalDate(body.tanggal_mulai_bekerja, 'tanggal_mulai_bekerja');
+    if (tanggalMulaiError) {
+      return NextResponse.json({ message: tanggalMulaiError }, { status: 400 });
+    }
+    const { value: tahunLulusValue, error: tahunLulusError } = normalizeNullableInt(body.tahun_lulus, 'tahun_lulus');
+    if (tahunLulusError) {
+      return NextResponse.json({ message: tahunLulusError }, { status: 400 });
+    }
+    const { value: jenisKelaminValue, error: jenisKelaminError } = normalizeNullableEnum(body.jenis_kelamin, JENIS_KELAMIN_VALUES, 'jenis_kelamin');
+    if (jenisKelaminError) {
+      return NextResponse.json({ message: jenisKelaminError }, { status: 400 });
+    }
+    const { value: statusKerjaValue, error: statusKerjaError } = normalizeNullableEnum(body.status_kerja, STATUS_KERJA_VALUES, 'status_kerja');
+    if (statusKerjaError) {
+      return NextResponse.json({ message: statusKerjaError }, { status: 400 });
+    }
+
+    const tempatLahir = normalizeNullableString(body.tempat_lahir);
+    const golonganDarah = normalizeNullableString(body.golongan_darah);
+    const statusPerkawinan = normalizeNullableString(body.status_perkawinan);
+    const alamatKtp = normalizeNullableString(body.alamat_ktp);
+    const alamatKtpProvinsi = normalizeNullableString(body.alamat_ktp_provinsi);
+    const alamatKtpKota = normalizeNullableString(body.alamat_ktp_kota);
+    const alamatDomisili = normalizeNullableString(body.alamat_domisili);
+    const alamatDomisiliProvinsi = normalizeNullableString(body.alamat_domisili_provinsi);
+    const alamatDomisiliKota = normalizeNullableString(body.alamat_domisili_kota);
+    const zonaWaktu = normalizeNullableString(body.zona_waktu);
+    const jenjangPendidikan = normalizeNullableString(body.jenjang_pendidikan);
+    const jurusan = normalizeNullableString(body.jurusan);
+    const namaInstitusi = normalizeNullableString(body.nama_institusi_pendidikan);
+    const nomorInduk = normalizeNullableString(body.nomor_induk_karyawan);
+    const divisi = normalizeNullableString(body.divisi);
+    const departementId = normalizeNullableString(body.id_departement);
+    const locationId = normalizeNullableString(body.id_location);
+    const jabatanId = normalizeNullableString(body.id_jabatan);
+    const nomorRekening = normalizeNullableString(body.nomor_rekening);
+    const jenisBank = normalizeNullableString(body.jenis_bank);
 
     let uploadedUrl = null;
     if (type === 'form') {
@@ -177,9 +228,31 @@ export async function PUT(req, { params }) {
       ...(body.email !== undefined && { email: String(body.email).trim().toLowerCase() }),
       ...(body.kontak !== undefined && { kontak: body.kontak === null ? null : String(body.kontak).trim() }),
       ...(body.agama !== undefined && { agama: body.agama === null ? null : String(body.agama).trim() }),
-      ...(body.tanggal_lahir !== undefined && { tanggal_lahir: tanggalLahirValue ?? null }),
-      ...(body.id_departement !== undefined && { id_departement: body.id_departement || null }),
-      ...(body.id_location !== undefined && { id_location: body.id_location || null }),
+      ...(tanggalLahirValue !== undefined && { tanggal_lahir: tanggalLahirValue }),
+      ...(tempatLahir.value !== undefined && { tempat_lahir: tempatLahir.value }),
+      ...(jenisKelaminValue !== undefined && { jenis_kelamin: jenisKelaminValue }),
+      ...(golonganDarah.value !== undefined && { golongan_darah: golonganDarah.value }),
+      ...(statusPerkawinan.value !== undefined && { status_perkawinan: statusPerkawinan.value }),
+      ...(alamatKtp.value !== undefined && { alamat_ktp: alamatKtp.value }),
+      ...(alamatKtpProvinsi.value !== undefined && { alamat_ktp_provinsi: alamatKtpProvinsi.value }),
+      ...(alamatKtpKota.value !== undefined && { alamat_ktp_kota: alamatKtpKota.value }),
+      ...(alamatDomisili.value !== undefined && { alamat_domisili: alamatDomisili.value }),
+      ...(alamatDomisiliProvinsi.value !== undefined && { alamat_domisili_provinsi: alamatDomisiliProvinsi.value }),
+      ...(alamatDomisiliKota.value !== undefined && { alamat_domisili_kota: alamatDomisiliKota.value }),
+      ...(zonaWaktu.value !== undefined && { zona_waktu: zonaWaktu.value }),
+      ...(jenjangPendidikan.value !== undefined && { jenjang_pendidikan: jenjangPendidikan.value }),
+      ...(jurusan.value !== undefined && { jurusan: jurusan.value }),
+      ...(namaInstitusi.value !== undefined && { nama_institusi_pendidikan: namaInstitusi.value }),
+      ...(tahunLulusValue !== undefined && { tahun_lulus: tahunLulusValue }),
+      ...(nomorInduk.value !== undefined && { nomor_induk_karyawan: nomorInduk.value }),
+      ...(divisi.value !== undefined && { divisi: divisi.value }),
+      ...(departementId.value !== undefined && { id_departement: departementId.value }),
+      ...(locationId.value !== undefined && { id_location: locationId.value }),
+      ...(jabatanId.value !== undefined && { id_jabatan: jabatanId.value }),
+      ...(statusKerjaValue !== undefined && { status_kerja: statusKerjaValue }),
+      ...(tanggalMulaiValue !== undefined && { tanggal_mulai_bekerja: tanggalMulaiValue }),
+      ...(nomorRekening.value !== undefined && { nomor_rekening: nomorRekening.value }),
+      ...(jenisBank.value !== undefined && { jenis_bank: jenisBank.value }),
       ...(body.role !== undefined && { role: String(body.role) }),
       ...(uploadedUrl && { foto_profil_user: uploadedUrl }),
       ...(!uploadedUrl && wantsRemove ? { foto_profil_user: null } : {}),
@@ -203,6 +276,16 @@ export async function PUT(req, { params }) {
       const loc = await db.location.findUnique({ where: { id_location: data.id_location } });
       if (!loc) return NextResponse.json({ message: 'Location/kantor tidak ditemukan.' }, { status: 400 });
     }
+    if (data.id_jabatan) {
+      const job = await db.jabatan.findUnique({ where: { id_jabatan: data.id_jabatan } });
+      if (!job) return NextResponse.json({ message: 'Jabatan tidak ditemukan.' }, { status: 400 });
+    }
+    if (data.nomor_induk_karyawan) {
+      const existingNik = await db.user.findUnique({ where: { nomor_induk_karyawan: data.nomor_induk_karyawan } });
+      if (existingNik && existingNik.id_user !== id) {
+        return NextResponse.json({ message: 'Nomor induk karyawan sudah digunakan oleh pengguna lain.' }, { status: 409 });
+      }
+    }
 
     const updated = await db.user.update({
       where: { id_user: id },
@@ -215,10 +298,35 @@ export async function PUT(req, { params }) {
         agama: true,
         foto_profil_user: true,
         tanggal_lahir: true,
+        tempat_lahir: true,
+        jenis_kelamin: true,
+        golongan_darah: true,
+        status_perkawinan: true,
+        alamat_ktp: true,
+        alamat_ktp_provinsi: true,
+        alamat_ktp_kota: true,
+        alamat_domisili: true,
+        alamat_domisili_provinsi: true,
+        alamat_domisili_kota: true,
+        zona_waktu: true,
+        jenjang_pendidikan: true,
+        jurusan: true,
+        nama_institusi_pendidikan: true,
+        tahun_lulus: true,
+        nomor_induk_karyawan: true,
+        divisi: true,
         role: true,
         id_departement: true,
         id_location: true,
+        id_jabatan: true,
+        status_kerja: true,
+        tanggal_mulai_bekerja: true,
+        nomor_rekening: true,
+        jenis_bank: true,
         updated_at: true,
+        departement: { select: { id_departement: true, nama_departement: true } },
+        kantor: { select: { id_location: true, nama_kantor: true } },
+        jabatan: { select: { id_jabatan: true, nama_jabatan: true } },
       },
     });
 

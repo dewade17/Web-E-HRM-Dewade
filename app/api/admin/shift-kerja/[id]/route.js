@@ -3,7 +3,7 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
-import { parseDateTimeToUTC } from '@/helpers/date-helper';
+import { extractWeeklyScheduleInput, normalizeWeeklySchedule, parseHariKerjaField, serializeHariKerja, transformShiftRecord } from '../schedul-utils';
 
 const SHIFT_STATUS = ['KERJA', 'LIBUR'];
 
@@ -36,7 +36,7 @@ function parseBodyDate(value, field) {
 export async function GET(_req, { params }) {
   try {
     const { id } = params;
-    const data = await db.shiftKerja.findUnique({
+    const rawData = await db.shiftKerja.findUnique({
       where: { id_shift_kerja: id },
       select: {
         id_shift_kerja: true,
@@ -64,10 +64,10 @@ export async function GET(_req, { params }) {
         },
       },
     });
-    if (!data) {
+    if (!rawData) {
       return NextResponse.json({ message: 'Shift kerja tidak ditemukan' }, { status: 404 });
     }
-    return NextResponse.json({ data });
+    return NextResponse.json({ data: transformShiftRecord(rawData) });
   } catch (err) {
     console.error('GET /shift-kerja/[id] error:', err);
     return NextResponse.json({ message: 'Server error' }, { status: 500 });
@@ -85,8 +85,12 @@ export async function PUT(req, { params }) {
       return NextResponse.json({ message: 'Shift kerja tidak ditemukan' }, { status: 404 });
     }
 
+    const existingSchedule = parseHariKerjaField(existing.hari_kerja);
+
     const body = await req.json();
     const data = {};
+
+    const weeklyScheduleInput = extractWeeklyScheduleInput(body);
 
     if (body.id_user !== undefined) {
       const idUser = String(body.id_user).trim();
@@ -100,14 +104,6 @@ export async function PUT(req, { params }) {
       data.id_user = idUser;
     }
 
-    if (body.hari_kerja !== undefined) {
-      const hariKerja = String(body.hari_kerja).trim();
-      if (!hariKerja) {
-        return NextResponse.json({ message: "Field 'hari_kerja' tidak boleh kosong." }, { status: 400 });
-      }
-      data.hari_kerja = hariKerja;
-    }
-
     if (body.status !== undefined) {
       const status = String(body.status).toUpperCase().trim();
       if (!SHIFT_STATUS.includes(status)) {
@@ -119,23 +115,60 @@ export async function PUT(req, { params }) {
     let tanggalMulai = existing.tanggal_mulai;
     let tanggalSelesai = existing.tanggal_selesai;
 
-    try {
-      const parsedMulai = parseBodyDate(body.tanggal_mulai, 'tanggal_mulai');
-      if (parsedMulai !== undefined) {
-        tanggalMulai = parsedMulai;
-        data.tanggal_mulai = parsedMulai;
-      }
-      const parsedSelesai = parseBodyDate(body.tanggal_selesai, 'tanggal_selesai');
-      if (parsedSelesai !== undefined) {
-        tanggalSelesai = parsedSelesai;
-        data.tanggal_selesai = parsedSelesai;
-      }
-    } catch (parseErr) {
-      return NextResponse.json({ message: parseErr.message }, { status: 400 });
-    }
+    if (weeklyScheduleInput !== undefined) {
+      const fallbackStart =
+        body.tanggal_mulai ??
+        body.start_date ??
+        body.startDate ??
+        body.mulai ??
+        body.referenceDate ??
+        body.weekStart ??
+        existing.tanggal_mulai ??
+        existingSchedule?.startDate ??
+        existingSchedule?.start_date ??
+        existingSchedule?.weekReference?.firstWeekStart;
+      const fallbackEnd = body.tanggal_selesai ?? body.end_date ?? body.endDate ?? body.selesai ?? body.until ?? body.weekEnd ?? existing.tanggal_selesai ?? existingSchedule?.endDate ?? existingSchedule?.end_date ?? null;
 
-    if ((body.tanggal_mulai !== undefined || body.tanggal_selesai !== undefined) && tanggalMulai instanceof Date && tanggalSelesai instanceof Date && tanggalSelesai < tanggalMulai) {
-      return NextResponse.json({ message: "Field 'tanggal_selesai' tidak boleh lebih awal dari 'tanggal_mulai'." }, { status: 400 });
+      try {
+        const normalized = normalizeWeeklySchedule(weeklyScheduleInput, {
+          fallbackStartDate: fallbackStart,
+          fallbackEndDate: fallbackEnd,
+        });
+        data.hari_kerja = serializeHariKerja(normalized.schedule);
+        tanggalMulai = normalized.tanggalMulai ?? null;
+        tanggalSelesai = normalized.tanggalSelesai ?? null;
+        data.tanggal_mulai = tanggalMulai;
+        data.tanggal_selesai = tanggalSelesai;
+      } catch (scheduleErr) {
+        return NextResponse.json({ message: scheduleErr.message }, { status: 400 });
+      }
+    } else {
+      if (body.hari_kerja !== undefined) {
+        const hariKerja = String(body.hari_kerja).trim();
+        if (!hariKerja) {
+          return NextResponse.json({ message: "Field 'hari_kerja' tidak boleh kosong." }, { status: 400 });
+        }
+        data.hari_kerja = hariKerja;
+      }
+
+      try {
+        const parsedMulai = parseBodyDate(body.tanggal_mulai, 'tanggal_mulai');
+        if (parsedMulai !== undefined) {
+          tanggalMulai = parsedMulai;
+          data.tanggal_mulai = parsedMulai;
+        }
+        const parsedSelesai = parseBodyDate(body.tanggal_selesai, 'tanggal_selesai');
+        if (parsedSelesai !== undefined) {
+          tanggalSelesai = parsedSelesai;
+          data.tanggal_selesai = parsedSelesai;
+        }
+      } catch (parseErr) {
+        return NextResponse.json({ message: parseErr.message }, { status: 400 });
+      }
+
+      if ((body.tanggal_mulai !== undefined || body.tanggal_selesai !== undefined) && tanggalMulai instanceof Date && tanggalSelesai instanceof Date && tanggalSelesai < tanggalMulai) {
+        return NextResponse.json({ message: "Field 'tanggal_selesai' tidak boleh lebih awal dari 'tanggal_mulai'." }, { status: 400 });
+      }
     }
 
     if (body.id_pola_kerja !== undefined) {
@@ -177,7 +210,7 @@ export async function PUT(req, { params }) {
       },
     });
 
-    return NextResponse.json({ message: 'Shift kerja diperbarui.', data: updated });
+    return NextResponse.json({ message: 'Shift kerja diperbarui.', data: transformShiftRecord(updated) });
   } catch (err) {
     if (err?.code === 'P2025') {
       return NextResponse.json({ message: 'Shift kerja tidak ditemukan' }, { status: 404 });

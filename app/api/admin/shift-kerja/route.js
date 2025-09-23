@@ -3,6 +3,7 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
+import { extractWeeklyScheduleInput, normalizeWeeklySchedule, serializeHariKerja, transformShiftRecord } from './schedule-utils';
 
 const SHIFT_STATUS = ['KERJA', 'LIBUR'];
 
@@ -106,7 +107,7 @@ export async function GET(req) {
       where.tanggal_selesai = tanggalSelesaiFilter;
     }
 
-    const [total, data] = await Promise.all([
+    const [total, rawData] = await Promise.all([
       db.shiftKerja.count({ where }),
       db.shiftKerja.findMany({
         where,
@@ -140,6 +141,8 @@ export async function GET(req) {
         },
       }),
     ]);
+
+    const data = rawData.map(transformShiftRecord);
 
     return NextResponse.json({
       data,
@@ -175,23 +178,45 @@ export async function POST(req) {
       return NextResponse.json({ message: 'User tidak ditemukan.' }, { status: 404 });
     }
 
-    const hariKerja = body.hari_kerja ? String(body.hari_kerja).trim() : '';
-    if (!hariKerja) {
-      return NextResponse.json({ message: "Field 'hari_kerja' wajib diisi." }, { status: 400 });
-    }
-
     const statusRaw = body.status ? String(body.status).toUpperCase().trim() : '';
     if (!SHIFT_STATUS.includes(statusRaw)) {
       return NextResponse.json({ message: "Field 'status' tidak valid." }, { status: 400 });
     }
 
+    const weeklyScheduleInput = extractWeeklyScheduleInput(body);
+
+    let hariKerjaValue;
     let tanggalMulai;
     let tanggalSelesai;
-    try {
-      tanggalMulai = parseBodyDate(body.tanggal_mulai, 'tanggal_mulai');
-      tanggalSelesai = parseBodyDate(body.tanggal_selesai, 'tanggal_selesai');
-    } catch (parseErr) {
-      return NextResponse.json({ message: parseErr.message }, { status: 400 });
+
+    if (weeklyScheduleInput !== undefined) {
+      const fallbackStart = body.tanggal_mulai ?? body.start_date ?? body.startDate ?? body.mulai ?? body.referenceDate ?? body.weekStart;
+      const fallbackEnd = body.tanggal_selesai ?? body.end_date ?? body.endDate ?? body.selesai ?? body.until ?? body.weekEnd;
+
+      try {
+        const normalized = normalizeWeeklySchedule(weeklyScheduleInput, {
+          fallbackStartDate: fallbackStart,
+          fallbackEndDate: fallbackEnd,
+        });
+        hariKerjaValue = serializeHariKerja(normalized.schedule);
+        tanggalMulai = normalized.tanggalMulai;
+        tanggalSelesai = normalized.tanggalSelesai;
+      } catch (scheduleErr) {
+        return NextResponse.json({ message: scheduleErr.message }, { status: 400 });
+      }
+    } else {
+      const hariKerja = body.hari_kerja ? String(body.hari_kerja).trim() : '';
+      if (!hariKerja) {
+        return NextResponse.json({ message: "Field 'hari_kerja' wajib diisi." }, { status: 400 });
+      }
+      hariKerjaValue = hariKerja;
+
+      try {
+        tanggalMulai = parseBodyDate(body.tanggal_mulai, 'tanggal_mulai');
+        tanggalSelesai = parseBodyDate(body.tanggal_selesai, 'tanggal_selesai');
+      } catch (parseErr) {
+        return NextResponse.json({ message: parseErr.message }, { status: 400 });
+      }
     }
 
     if (tanggalMulai instanceof Date && tanggalSelesai instanceof Date && tanggalSelesai < tanggalMulai) {
@@ -220,7 +245,7 @@ export async function POST(req) {
     const created = await db.shiftKerja.create({
       data: {
         id_user: idUser,
-        hari_kerja: hariKerja,
+        hari_kerja: hariKerjaValue,
         status: statusRaw,
         tanggal_mulai: tanggalMulai ?? null,
         tanggal_selesai: tanggalSelesai ?? null,
@@ -238,7 +263,7 @@ export async function POST(req) {
       },
     });
 
-    return NextResponse.json({ message: 'Shift kerja dibuat.', data: created }, { status: 201 });
+    return NextResponse.json({ message: 'Shift kerja dibuat.', data: transformShiftRecord(created) }, { status: 201 });
   } catch (err) {
     console.error('POST /shift-kerja error:', err);
     return NextResponse.json({ message: 'Server error' }, { status: 500 });
