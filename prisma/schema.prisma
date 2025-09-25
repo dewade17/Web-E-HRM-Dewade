@@ -17,8 +17,8 @@ enum Role {
   OPERASIONAL
   DIREKTUR
   SUPERADMIN // Ditambahkan
-  SUBADMIN // Ditambahkan
-  SUPERVISI // Ditambahkan
+  SUBADMIN   // Ditambahkan
+  SUPERVISI  // Ditambahkan
 }
 
 enum AtasanRole {
@@ -116,6 +116,13 @@ enum NotificationStatus {
   archived
 }
 
+//// (opsional jika mau status token yang lebih eksplisit)
+// enum FcmTokenStatus {
+//   active
+//   expired
+//   revoked
+// }
+
 /// ===== Models =====
 
 model Location {
@@ -180,8 +187,8 @@ model Cuti {
   current_level     Int?
 
   // ----- PENAMBAHAN DARI DIAGRAM -----
-  impact    Impact? // Dari diagram Izin Hari
-  hand_over String? @db.LongText // Dari diagram Cuti & Izin Hari
+  impact    Impact?    // Dari diagram Izin Hari
+  hand_over String?    @db.LongText // Dari diagram Cuti & Izin Hari
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -306,24 +313,71 @@ model AgendaKerja {
   @@map("agenda_kerja")
 }
 
-model Kunjungan {
-  id_kunjungan String    @id @default(uuid()) @db.Char(36)
-  id_user      String    @db.Char(36)
-  tanggal      DateTime? @db.Date
-  jam_mulai    DateTime? @db.DateTime(0)
-  jam_selesai  DateTime? @db.DateTime(0)
-  deskripsi    String?   @db.LongText
-  lokasi       String?   @db.LongText
+// ====== BARU: MASTER DATA KUNJUNGAN ======
+model MasterDataKunjungan {
+  id_master_data_kunjungan String  @id @default(uuid()) @db.Char(36)
+  kategori_kunjungan       String  @unique @db.VarChar(191)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
   deleted_at DateTime? @db.DateTime(0)
 
-  user    User                       @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
-  reports KunjunganReportRecipient[]
+  kunjungan Kunjungan[]
+
+  @@map("master_data_kunjungan")
+}
+
+model Kunjungan {
+  id_kunjungan               String    @id @default(uuid()) @db.Char(36)
+  id_user                    String    @db.Char(36)
+  id_master_data_kunjungan   String?   @db.Char(36) // kategori via master
+  tanggal                    DateTime? @db.Date
+  jam_mulai                  DateTime? @db.DateTime(0)
+  jam_selesai                DateTime? @db.DateTime(0)
+  deskripsi                  String?   @db.LongText
+
+  // PERBAIKAN: ganti lokasi -> latitude/longitude
+  latitude                   Decimal?  @db.Decimal(10, 6)
+  longitude                  Decimal?  @db.Decimal(10, 6)
+
+  // BARU: catatan bebas handover (opsional)
+  hand_over                  String?   @db.LongText
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  user      User                 @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  kategori  MasterDataKunjungan? @relation(fields: [id_master_data_kunjungan], references: [id_master_data_kunjungan], onDelete: SetNull, onUpdate: Cascade)
+  reports   KunjunganReportRecipient[]
+
+  // BARU: daftar user yang di-Tag untuk handover
+  handover_tags KunjunganHandover[]
 
   @@index([id_user, tanggal])
+  @@index([id_master_data_kunjungan])
   @@map("kunjungan")
+}
+
+// BARU: tabel people-tags untuk handover seperti Instagram
+model KunjunganHandover {
+  id_kunjungan_handover   String   @id @default(uuid()) @db.Char(36)
+  id_kunjungan            String   @db.Char(36)
+  id_user                 String   @db.Char(36)
+  nama_karyawan_snapshot  String?  @db.VarChar(255)
+  meta_json               Json?    // {note?, source?, x_pct?, y_pct?}
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  kunjungan Kunjungan @relation(fields: [id_kunjungan], references: [id_kunjungan], onDelete: Cascade, onUpdate: Cascade)
+  user      User      @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([id_kunjungan, id_user])
+  @@index([id_kunjungan])
+  @@index([id_user])
+  @@map("kunjungan_handover")
 }
 
 model KunjunganReportRecipient {
@@ -350,7 +404,7 @@ model KunjunganReportRecipient {
   @@map("kunjungan_report_recipients")
 }
 
-// DIPERBARUI: Menambahkan semua field dari diagram User
+// DIPERBARUI: Model ini sudah ada dan sesuai dengan diagram.
 model User {
   id_user                   String    @id @default(uuid()) @db.Char(36)
   nama_pengguna             String    @db.VarChar(255)
@@ -417,6 +471,7 @@ model User {
   kunjungan_reports_received KunjunganReportRecipient[]
   notifications              Notification[]
   istirahat                  Istirahat[] // Relasi ke model Istirahat
+  handover_kunjungan         KunjunganHandover[]       // reverse relation tags
 
   @@index([id_departement])
   @@index([id_location])
@@ -529,6 +584,14 @@ model Device {
   device_identifier String?   @db.VarChar(191)
   last_seen         DateTime? @db.DateTime(0)
 
+  // ===== FCM support =====
+  fcm_token            String?   @db.VarChar(1024)  // registration token
+  fcm_token_updated_at DateTime? @db.DateTime(0)
+  push_enabled         Boolean    @default(true)
+  last_push_at         DateTime?  @db.DateTime(0)
+  failed_push_count    Int        @default(0)
+  // fcm_token_status   FcmTokenStatus? // (aktifkan jika pakai enum status)
+
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
   deleted_at DateTime? @db.DateTime(0)
@@ -536,6 +599,8 @@ model Device {
   user User @relation(fields: [id_user], references: [id_user], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([id_user])
+  @@index([device_identifier])
+  @@index([fcm_token])
   @@map("device")
 }
 
