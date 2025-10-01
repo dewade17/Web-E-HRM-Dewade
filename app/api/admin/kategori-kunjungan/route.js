@@ -32,6 +32,7 @@ async function ensureAuth(req) {
   };
 }
 
+// Hanya untuk role tertentu, jika diperlukan
 function guardOperational(actor) {
   if (actor?.role !== 'OPERASIONAL') {
     return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL yang dapat mengakses resource ini.' }, { status: 403 });
@@ -67,15 +68,16 @@ export async function GET(req) {
         : {}),
     };
 
+    // Mengganti db.masterDataKunjungan menjadi db.kategoriKunjungan
     const [total, data] = await Promise.all([
-      db.masterDataKunjungan.count({ where }),
-      db.masterDataKunjungan.findMany({
+      db.kategoriKunjungan.count({ where }),
+      db.kategoriKunjungan.findMany({
         where,
         orderBy: { [orderBy]: sort },
         skip: (page - 1) * pageSize,
         take: pageSize,
         select: {
-          id_master_data_kunjungan: true,
+          id_kategori_kunjungan: true, // Field ID diperbarui
           kategori_kunjungan: true,
           created_at: true,
           updated_at: true,
@@ -94,7 +96,7 @@ export async function GET(req) {
       },
     });
   } catch (err) {
-    console.error('GET /master-data-kunjungan error:', err);
+    console.error('GET /kategori-kunjungan error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
@@ -115,10 +117,11 @@ export async function POST(req) {
 
     const kategori_kunjungan = String(rawKategori).trim();
 
-    const created = await db.masterDataKunjungan.create({
+    // Mengganti db.masterDataKunjungan menjadi db.kategoriKunjungan
+    const created = await db.kategoriKunjungan.create({
       data: { kategori_kunjungan },
       select: {
-        id_master_data_kunjungan: true,
+        id_kategori_kunjungan: true, // Field ID diperbarui
         kategori_kunjungan: true,
         created_at: true,
       },
@@ -129,7 +132,7 @@ export async function POST(req) {
     if (err?.code === 'P2002') {
       return NextResponse.json({ message: 'Kategori kunjungan sudah terdaftar.' }, { status: 409 });
     }
-    console.error('POST /master-data-kunjungan error:', err);
+    console.error('POST /kategori-kunjungan error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
