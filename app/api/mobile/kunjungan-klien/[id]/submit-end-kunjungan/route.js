@@ -76,6 +76,10 @@ function sanitizePathPart(part) {
   return safe || 'unknown';
 }
 
+const RECIPIENT_ROLE_VALUES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR']);
+const REPORT_STATUS_VALUES = new Set(['terkirim', 'disetujui', 'ditolak']);
+const RECIPIENT_FIELD_NAMES = ['recipients', 'report_recipients', 'kunjungan_report_recipients'];
+
 async function uploadLampiranToSupabase(userId, file) {
   if (!isFile(file)) return null;
   const supabase = getSupabase();
@@ -123,6 +127,96 @@ async function parseRequestBody(req) {
   }
 }
 
+function parseRecipientsValue(value, fieldName) {
+  if (value === undefined) return null;
+
+  let parsed = value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return [];
+    }
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (err) {
+      const error = new Error(`Field '${fieldName}' harus berupa JSON array yang valid.`);
+      error.status = 400;
+      throw error;
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    const error = new Error(`Field '${fieldName}' harus berupa array.`);
+    error.status = 400;
+    throw error;
+  }
+
+  const sanitized = [];
+  const seenUserIds = new Set();
+  parsed.forEach((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      const error = new Error(`Item ke-${index + 1} pada field '${fieldName}' harus berupa objek.`);
+      error.status = 400;
+      throw error;
+    }
+
+    const idCandidate = item.id_user ?? item.idUser ?? item.user_id ?? item.userId ?? item.recipient_id ?? item.recipientId;
+    const idUser = typeof idCandidate === 'string' || typeof idCandidate === 'number' ? String(idCandidate).trim() : '';
+    if (!idUser) {
+      const error = new Error(`Item ke-${index + 1} pada field '${fieldName}' harus memiliki 'id_user' yang valid.`);
+      error.status = 400;
+      throw error;
+    }
+    if (seenUserIds.has(idUser)) {
+      const error = new Error(`Field '${fieldName}' tidak boleh berisi penerima duplikat (id_user: ${idUser}).`);
+      error.status = 400;
+      throw error;
+    }
+    seenUserIds.add(idUser);
+
+    let roleCandidate = item.recipient_role_snapshot ?? item.role ?? item.role_snapshot ?? item.roleSnapshot ?? item.recipientRole ?? item.recipientRoleSnapshot;
+    let roleValue = null;
+    if (roleCandidate !== undefined && roleCandidate !== null && String(roleCandidate).trim()) {
+      const normalizedRole = String(roleCandidate).trim().toUpperCase();
+      if (!RECIPIENT_ROLE_VALUES.has(normalizedRole)) {
+        const error = new Error(`Item ke-${index + 1} pada field '${fieldName}' memiliki 'recipient_role_snapshot' tidak valid.`);
+        error.status = 400;
+        throw error;
+      }
+      roleValue = normalizedRole;
+    }
+
+    let statusCandidate = item.status;
+    let statusValue;
+    if (statusCandidate === undefined || statusCandidate === null || String(statusCandidate).trim() === '') {
+      statusValue = undefined;
+    } else {
+      const normalizedStatus = String(statusCandidate).trim().toLowerCase();
+      if (!REPORT_STATUS_VALUES.has(normalizedStatus)) {
+        const error = new Error(`Item ke-${index + 1} pada field '${fieldName}' memiliki 'status' tidak valid.`);
+        error.status = 400;
+        throw error;
+      }
+      statusValue = normalizedStatus;
+    }
+
+    let catatanValue = null;
+    if (item.catatan !== undefined && item.catatan !== null) {
+      const trimmedCatatan = String(item.catatan).trim();
+      catatanValue = trimmedCatatan ? trimmedCatatan : null;
+    }
+
+    sanitized.push({
+      id_user: idUser,
+      recipient_role_snapshot: roleValue,
+      status: statusValue,
+      catatan: catatanValue,
+    });
+  });
+
+  return sanitized;
+}
+
 // Mendefinisikan field yang diizinkan untuk endpoint ini
 const allowedFields = new Set([
   'deskripsi',
@@ -136,8 +230,24 @@ const allowedFields = new Set([
   'lampiran_file',
   'lampiran_kunjungan_file',
   'file',
+  'recipients',
+  'report_recipients',
+  'kunjungan_report_recipients',
 ]);
 const coordinateFields = ['end_latitude', 'end_longitude'];
+
+const recipientSelect = {
+  id_kunjungan_report_recipient: true,
+  id_user: true,
+  recipient_role_snapshot: true,
+  catatan: true,
+  status: true,
+  notified_at: true,
+  read_at: true,
+  acted_at: true,
+  created_at: true,
+  updated_at: true,
+};
 
 export async function PUT(req, { params }) {
   const auth = await ensureAuth(req);
@@ -222,21 +332,113 @@ export async function PUT(req, { params }) {
     } else if (hasOwn(body, 'lampiran_kunjungan_url')) {
       data.lampiran_kunjungan_url = body.lampiran_kunjungan_url;
     }
+    let recipientsPayload = null;
+    for (const field of RECIPIENT_FIELD_NAMES) {
+      if (hasOwn(body, field)) {
+        try {
+          recipientsPayload = parseRecipientsValue(body[field], field);
+        } catch (parseErr) {
+          if (parseErr?.status) {
+            return NextResponse.json({ message: parseErr.message }, { status: parseErr.status });
+          }
+          throw parseErr;
+        }
+        break;
+      }
+    }
 
-    const updated = await db.kunjungan.update({
-      where: { id_kunjungan: id },
-      data,
-      select: {
-        id_kunjungan: true,
-        deskripsi: true,
-        jam_checkout: true,
-        end_latitude: true,
-        end_longitude: true,
-        lampiran_kunjungan_url: true,
-        status_kunjungan: true,
-        duration: true,
-        updated_at: true,
-      },
+    const updated = await db.$transaction(async (tx) => {
+      const updatedVisit = await tx.kunjungan.update({
+        where: { id_kunjungan: id },
+        data,
+        select: {
+          id_kunjungan: true,
+          deskripsi: true,
+          jam_checkout: true,
+          end_latitude: true,
+          end_longitude: true,
+          lampiran_kunjungan_url: true,
+          status_kunjungan: true,
+          duration: true,
+          updated_at: true,
+          reports: {
+            where: { deleted_at: null },
+            select: recipientSelect,
+          },
+        },
+      });
+
+      if (recipientsPayload !== null) {
+        const keepUserIds = recipientsPayload.map((recipient) => recipient.id_user);
+        const now = new Date();
+
+        if (keepUserIds.length === 0) {
+          await tx.kunjunganReportRecipient.updateMany({
+            where: { id_kunjungan: id, deleted_at: null },
+            data: { deleted_at: now },
+          });
+        } else {
+          await tx.kunjunganReportRecipient.updateMany({
+            where: {
+              id_kunjungan: id,
+              deleted_at: null,
+              id_user: { notIn: keepUserIds },
+            },
+            data: { deleted_at: now },
+          });
+        }
+
+        for (const recipient of recipientsPayload) {
+          const createData = {
+            id_kunjungan: id,
+            id_user: recipient.id_user,
+            recipient_role_snapshot: recipient.recipient_role_snapshot,
+            catatan: recipient.catatan,
+            status: recipient.status ?? 'terkirim',
+          };
+
+          const updateData = {
+            recipient_role_snapshot: recipient.recipient_role_snapshot,
+            catatan: recipient.catatan,
+            deleted_at: null,
+          };
+          if (recipient.status) {
+            updateData.status = recipient.status;
+          }
+
+          await tx.kunjunganReportRecipient.upsert({
+            where: {
+              id_kunjungan_id_user: { id_kunjungan: id, id_user: recipient.id_user },
+            },
+            create: createData,
+            update: updateData,
+          });
+        }
+      }
+
+      if (recipientsPayload !== null) {
+        const refreshed = await tx.kunjungan.findUnique({
+          where: { id_kunjungan: id },
+          select: {
+            id_kunjungan: true,
+            deskripsi: true,
+            jam_checkout: true,
+            end_latitude: true,
+            end_longitude: true,
+            lampiran_kunjungan_url: true,
+            status_kunjungan: true,
+            duration: true,
+            updated_at: true,
+            reports: {
+              where: { deleted_at: null },
+              select: recipientSelect,
+            },
+          },
+        });
+        return refreshed ?? updatedVisit;
+      }
+
+      return updatedVisit;
     });
 
     return NextResponse.json({ message: 'Check-out kunjungan berhasil.', data: updated });
