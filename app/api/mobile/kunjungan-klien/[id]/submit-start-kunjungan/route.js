@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { parseDateTimeToUTC } from '@/helpers/date-helper';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
@@ -176,8 +177,8 @@ export async function PUT(req, { params }) {
     // Logika untuk jam_checkin
     if (hasOwn(body, 'jam_checkin')) {
       const value = body.jam_checkin;
-      const parsed = new Date(value);
-      if (Number.isNaN(parsed.getTime())) {
+      const parsed = parseDateTimeToUTC(value);
+      if (!parsed) {
         return NextResponse.json({ message: "Field 'jam_checkin' tidak valid." }, { status: 400 });
       }
       data.jam_checkin = parsed;
@@ -224,7 +225,7 @@ export async function PUT(req, { params }) {
 
     return NextResponse.json({ message: 'Check-in kunjungan berhasil.', data: updated });
   } catch (err) {
-    console.error('PUT /mobile/kunjungan-klien/[id]/submit-kunjungan error:', err);
+    console.error('PUT /mobile/kunjungan-klien/[id]/submit-start-kunjungan error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }

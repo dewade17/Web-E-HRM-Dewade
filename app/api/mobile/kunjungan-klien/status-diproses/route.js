@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { endOfUTCDay, parseDateOnlyToUTC, startOfUTCDay } from '@/helpers/date-helper';
 
 // Helper untuk autentikasi
 async function ensureAuth(req) {
@@ -78,23 +79,21 @@ export async function GET(req) {
 
     // Tambahkan filter tanggal jika ada
     if (tanggalParam) {
-      const tanggal = new Date(tanggalParam);
-      if (Number.isNaN(tanggal.getTime())) {
+      const tanggal = parseDateOnlyToUTC(tanggalParam);
+      if (!tanggal) {
         return NextResponse.json({ message: "Parameter 'tanggal' tidak valid. Gunakan format YYYY-MM-DD." }, { status: 400 });
       }
-
-      const startOfDay = new Date(tanggal);
-      startOfDay.setUTCHours(0, 0, 0, 0);
-
-      const endOfDay = new Date(tanggal);
-      endOfDay.setUTCHours(23, 59, 59, 999);
+      const startOfDay = startOfUTCDay(tanggal);
+      const endOfDay = endOfUTCDay(tanggal);
+      if (!startOfDay || !endOfDay) {
+        return NextResponse.json({ message: "Parameter 'tanggal' tidak valid. Gunakan format YYYY-MM-DD." }, { status: 400 });
+      }
 
       where.tanggal = {
         gte: startOfDay,
         lte: endOfDay,
       };
     }
-
     const [total, items] = await Promise.all([
       db.kunjungan.count({ where }),
       db.kunjungan.findMany({

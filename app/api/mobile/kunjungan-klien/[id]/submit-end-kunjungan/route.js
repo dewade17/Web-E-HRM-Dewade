@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { parseDateTimeToUTC } from '@/helpers/date-helper';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
@@ -290,8 +291,8 @@ export async function PUT(req, { params }) {
     // Proses 'jam_checkout'
     if (hasOwn(body, 'jam_checkout')) {
       const value = body.jam_checkout;
-      const parsed = new Date(value);
-      if (Number.isNaN(parsed.getTime())) {
+      const parsed = parseDateTimeToUTC(value);
+      if (!parsed) {
         return NextResponse.json({ message: "Field 'jam_checkout' tidak valid." }, { status: 400 });
       }
       const startTime = existing.jam_checkin || existing.jam_mulai;

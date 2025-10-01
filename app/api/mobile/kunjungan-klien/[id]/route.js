@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { parseDateOnlyToUTC, parseDateTimeToUTC } from '@/helpers/date-helper';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
@@ -91,13 +92,7 @@ function isFile(value) {
 }
 
 function findLampiranFile(body) {
-  const candidates = [
-    body.lampiran_kunjungan,
-    body.lampiran,
-    body.lampiran_file,
-    body.lampiran_kunjungan_file,
-    body.file,
-  ];
+  const candidates = [body.lampiran_kunjungan, body.lampiran, body.lampiran_file, body.lampiran_kunjungan_file, body.file];
   return candidates.find((candidate) => isFile(candidate) && candidate.size > 0) || null;
 }
 
@@ -278,8 +273,8 @@ export async function PUT(req, { params }) {
       if (isNullLike(rawTanggal)) {
         data.tanggal = null;
       } else {
-        const tanggal = new Date(rawTanggal);
-        if (Number.isNaN(tanggal.getTime())) {
+        const tanggal = parseDateOnlyToUTC(rawTanggal);
+        if (!tanggal) {
           return NextResponse.json({ message: "Field 'tanggal' tidak valid." }, { status: 400 });
         }
         data.tanggal = tanggal;
@@ -290,8 +285,8 @@ export async function PUT(req, { params }) {
       if (isNullLike(body.jam_mulai)) {
         data.jam_mulai = null;
       } else {
-        const jamMulai = new Date(body.jam_mulai);
-        if (Number.isNaN(jamMulai.getTime())) {
+        const jamMulai = parseDateTimeToUTC(body.jam_mulai);
+        if (!jamMulai) {
           return NextResponse.json({ message: "Field 'jam_mulai' tidak valid." }, { status: 400 });
         }
         data.jam_mulai = jamMulai;
@@ -302,8 +297,8 @@ export async function PUT(req, { params }) {
       if (isNullLike(body.jam_selesai)) {
         data.jam_selesai = null;
       } else {
-        const jamSelesai = new Date(body.jam_selesai);
-        if (Number.isNaN(jamSelesai.getTime())) {
+        const jamSelesai = parseDateTimeToUTC(body.jam_selesai);
+        if (!jamSelesai) {
           return NextResponse.json({ message: "Field 'jam_selesai' tidak valid." }, { status: 400 });
         }
         data.jam_selesai = jamSelesai;

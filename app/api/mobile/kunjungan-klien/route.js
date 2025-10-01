@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import { endOfUTCDay, parseDateOnlyToUTC, parseDateTimeToUTC, startOfUTCDay } from '@/helpers/date-helper';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
@@ -174,18 +175,18 @@ export async function POST(req) {
       return NextResponse.json({ message: "Field 'tanggal' wajib diisi." }, { status: 400 });
     }
 
-    const tanggalDate = new Date(tanggal);
-    if (Number.isNaN(tanggalDate.getTime())) {
+    const tanggalDate = parseDateOnlyToUTC(tanggal);
+    if (!tanggalDate) {
       return NextResponse.json({ message: "Field 'tanggal' tidak valid." }, { status: 400 });
     }
 
-    const jamMulaiDate = !isNullLike(jam_mulai) ? new Date(jam_mulai) : null;
-    if (jamMulaiDate && Number.isNaN(jamMulaiDate.getTime())) {
+    const jamMulaiDate = !isNullLike(jam_mulai) ? parseDateTimeToUTC(jam_mulai) : null;
+    if (jamMulaiDate === null && !isNullLike(jam_mulai)) {
       return NextResponse.json({ message: "Field 'jam_mulai' tidak valid." }, { status: 400 });
     }
 
-    const jamSelesaiDate = !isNullLike(jam_selesai) ? new Date(jam_selesai) : null;
-    if (jamSelesaiDate && Number.isNaN(jamSelesaiDate.getTime())) {
+    const jamSelesaiDate = !isNullLike(jam_selesai) ? parseDateTimeToUTC(jam_selesai) : null;
+    if (jamSelesaiDate === null && !isNullLike(jam_selesai)) {
       return NextResponse.json({ message: "Field 'jam_selesai' tidak valid." }, { status: 400 });
     }
 
