@@ -6,37 +6,15 @@ import db from '@/lib/prisma';
 import { createClient } from '@supabase/supabase-js';
 import jwt from 'jsonwebtoken';
 import { verifyAuthToken } from '@/lib/jwt';
-import { parseDateOnlyToUTC } from '@/helpers/date-helper';
-import { JENIS_KELAMIN_VALUES, normalizeNullableEnum, normalizeNullableInt, normalizeNullableString, normalizeOptionalDate } from '@/app/api/_utils/user-field-normalizer';
 
-// KARYAWAN hanya boleh ubah field ini
-const KARYAWAN_ALLOW = new Set([
-  'nama_pengguna',
-  'email',
-  'kontak',
-  'agama',
-  'foto_profil_user',
-  'tanggal_lahir',
-  'tempat_lahir',
-  'jenis_kelamin',
-  'golongan_darah',
-  'status_perkawinan',
-  'alamat_ktp',
-  'alamat_ktp_provinsi',
-  'alamat_ktp_kota',
-  'alamat_domisili',
-  'alamat_domisili_provinsi',
-  'alamat_domisili_kota',
-  'zona_waktu',
-  'jenjang_pendidikan',
-  'jurusan',
-  'nama_institusi_pendidikan',
-  'tahun_lulus',
-  'nomor_rekening',
-  'jenis_bank',
-]);
+/* =========================================================
+   ALLOWLIST: KARYAWAN hanya boleh ubah field berikut
+   =======================================================*/
+const KARYAWAN_ALLOW = new Set(['nama_pengguna', 'email', 'kontak', 'agama', 'foto_profil_user', 'tanggal_lahir', 'alamat_ktp', 'alamat_domisili', 'golongan_darah', 'nomor_rekening', 'jenis_bank']);
 
-// ===== Helpers: Supabase Storage =====
+/* =========================================================
+   SUPABASE STORAGE HELPERS
+   =======================================================*/
 function getSupabase() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -84,7 +62,9 @@ async function uploadFotoToSupabase(nama_pengguna, file) {
   return pub?.publicUrl || null;
 }
 
-// ===== Helpers: Body Parser =====
+/* =========================================================
+   BODY PARSER
+   =======================================================*/
 async function parseBody(req) {
   const ct = req.headers.get('content-type') || '';
   if (ct.includes('multipart/form-data')) {
@@ -99,7 +79,9 @@ async function parseBody(req) {
   return { type: 'json', body: await req.json() };
 }
 
-// ===== Helpers: Ambil & verifikasi token dari header =====
+/* =========================================================
+   TOKEN HELPERS
+   =======================================================*/
 function getClaimsFromRequest(req) {
   const auth = req.headers.get('authorization') || '';
   if (!auth.startsWith('Bearer ')) {
@@ -109,7 +91,7 @@ function getClaimsFromRequest(req) {
   }
   const token = auth.slice(7).trim();
   try {
-    return verifyAuthToken(token);
+    return verifyAuthToken(token); // { sub, id_user, ... }
   } catch (err) {
     if (err instanceof jwt.TokenExpiredError) {
       const e = new Error('Token sudah kedaluwarsa');
@@ -127,7 +109,116 @@ function getClaimsFromRequest(req) {
   }
 }
 
-// ===== GET (self only) =====
+/* =========================================================
+   DATE-HELPER (digabung dari date-helper.js)
+   - Aman untuk MySQL DATE/DateTime via Prisma
+   =======================================================*/
+const DATE_ONLY_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DATETIME_NO_TZ_REGEX = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$/;
+
+function cloneDateToUTC(date) {
+  if (!(date instanceof Date)) return null;
+  if (Number.isNaN(date.getTime())) return null;
+  // toISOString selalu UTC, jadi new Date(iso) = UTC clone
+  return new Date(date.toISOString());
+}
+
+function parseDateOnlyString(value) {
+  const match = DATE_ONLY_REGEX.exec(value);
+  if (!match) return null;
+  const [, year, month, day] = match;
+  // set ke UTC midnight
+  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+}
+
+function parseDateTimeNoTzString(value) {
+  const normalized = value.replace(' ', 'T');
+  const match = DATETIME_NO_TZ_REGEX.exec(normalized);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second = '0', millisecond = '0'] = match;
+  const ms = `${millisecond}`.padEnd(3, '0').slice(0, 3);
+  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second), Number(ms)));
+}
+
+export function parseDateOnlyToUTC(value) {
+  if (value === undefined || value === null) return null;
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsedString = parseDateOnlyString(trimmed);
+    if (parsedString) return parsedString;
+    const parsed = new Date(trimmed);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()));
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()));
+}
+
+export function parseDateTimeToUTC(value) {
+  if (value === undefined || value === null) return null;
+
+  if (value instanceof Date) {
+    return cloneDateToUTC(value);
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const noTz = parseDateTimeNoTzString(trimmed);
+    if (noTz) return noTz;
+    const parsed = new Date(trimmed);
+    return cloneDateToUTC(parsed);
+  }
+
+  const parsed = new Date(value);
+  return cloneDateToUTC(parsed);
+}
+
+export function startOfUTCDay(value) {
+  const parsed = value instanceof Date ? cloneDateToUTC(value) : parseDateTimeToUTC(value);
+  if (!parsed) return null;
+  parsed.setUTCHours(0, 0, 0, 0);
+  return parsed;
+}
+
+export function endOfUTCDay(value) {
+  const parsed = value instanceof Date ? cloneDateToUTC(value) : parseDateTimeToUTC(value);
+  if (!parsed) return null;
+  parsed.setUTCHours(23, 59, 59, 999);
+  return parsed;
+}
+
+/* =========================================================
+   NORMALIZER STRING & TANGGAL (DATE-ONLY)
+   =======================================================*/
+function normalizeNullableString(value) {
+  if (value === undefined) return { defined: false };
+  const trimmed = String(value).trim();
+  if (trimmed === '') return { defined: true, value: null };
+  return { defined: true, value: trimmed };
+}
+
+// khusus kolom DATE (tanpa waktu) seperti `tanggal_lahir`
+function normalizeOptionalDateOnly(v, fieldName) {
+  if (v === undefined) return { value: undefined, error: null };
+  if (v === null || String(v).trim?.() === '') return { value: null, error: null };
+  const d = parseDateOnlyToUTC(v); // aman untuk @db.Date
+  if (!d) return { value: undefined, error: `Format tanggal tidak valid untuk ${fieldName}` };
+  return { value: d, error: null };
+}
+
+/* =========================================================
+   GET (self only) → hanya 11 field
+   =======================================================*/
 export async function GET(req, { params }) {
   try {
     const claims = getClaimsFromRequest(req);
@@ -142,40 +233,15 @@ export async function GET(req, { params }) {
         id_user: true,
         nama_pengguna: true,
         email: true,
+        alamat_domisili: true,
+        alamat_ktp: true,
         kontak: true,
         agama: true,
-        foto_profil_user: true,
         tanggal_lahir: true,
-        tempat_lahir: true,
-        jenis_kelamin: true,
         golongan_darah: true,
-        status_perkawinan: true,
-        alamat_ktp: true,
-        alamat_ktp_provinsi: true,
-        alamat_ktp_kota: true,
-        alamat_domisili: true,
-        alamat_domisili_provinsi: true,
-        alamat_domisili_kota: true,
-        zona_waktu: true,
-        jenjang_pendidikan: true,
-        jurusan: true,
-        nama_institusi_pendidikan: true,
-        tahun_lulus: true,
-        nomor_induk_karyawan: true,
-        divisi: true,
-        role: true,
-        id_departement: true,
-        id_location: true,
-        id_jabatan: true,
-        status_kerja: true,
-        tanggal_mulai_bekerja: true,
         nomor_rekening: true,
         jenis_bank: true,
-        created_at: true,
-        updated_at: true,
-        departement: { select: { id_departement: true, nama_departement: true } },
-        kantor: { select: { id_location: true, nama_kantor: true } },
-        jabatan: { select: { id_jabatan: true, nama_jabatan: true } },
+        foto_profil_user: true,
       },
     });
     if (!user) return NextResponse.json({ message: 'User tidak ditemukan' }, { status: 404 });
@@ -187,7 +253,9 @@ export async function GET(req, { params }) {
   }
 }
 
-// ===== PUT (self only, allowlist) =====
+/* =========================================================
+   PUT (self only) → hanya 11 field
+   =======================================================*/
 export async function PUT(req, { params }) {
   try {
     const claims = getClaimsFromRequest(req);
@@ -199,48 +267,37 @@ export async function PUT(req, { params }) {
 
     const current = await db.user.findUnique({
       where: { id_user: id },
-      select: { nama_pengguna: true, foto_profil_user: true },
+      select: { nama_pengguna: true, email: true, foto_profil_user: true },
     });
     if (!current) return NextResponse.json({ message: 'User tidak ditemukan' }, { status: 404 });
 
     const { type, body } = await parseBody(req);
 
-    // Tolak jika mencoba kirim id_departement / id_location / role
-    if ('id_departement' in body || 'id_location' in body || 'role' in body) {
-      return NextResponse.json({ message: 'Field departement/location/role hanya bisa diubah oleh HR.' }, { status: 403 });
+    // Tolak bila ada field non-domain karyawan
+    if ('id_departement' in body || 'id_location' in body || 'role' in body || 'id_jabatan' in body || 'status_kerja' in body) {
+      return NextResponse.json({ message: 'Field departement/location/jabatan/role/status_kerja hanya bisa diubah oleh HR.' }, { status: 403 });
     }
 
     const wantsRemove = body.remove_foto === true || body.remove_foto === 'true';
 
-    const { value: tanggalLahirValue, error: tanggalLahirError } = normalizeOptionalDate(body.tanggal_lahir, 'tanggal_lahir');
+    // Validasi + normalisasi tanggal (DATE-ONLY)
+    const { value: tanggalLahirValue, error: tanggalLahirError } = normalizeOptionalDateOnly(body.tanggal_lahir, 'tanggal_lahir');
     if (tanggalLahirError) {
       return NextResponse.json({ message: tanggalLahirError }, { status: 400 });
     }
-    const { value: tahunLulusValue, error: tahunLulusError } = normalizeNullableInt(body.tahun_lulus, 'tahun_lulus');
-    if (tahunLulusError) {
-      return NextResponse.json({ message: tahunLulusError }, { status: 400 });
-    }
-    const { value: jenisKelaminValue, error: jenisKelaminError } = normalizeNullableEnum(body.jenis_kelamin, JENIS_KELAMIN_VALUES, 'jenis_kelamin');
-    if (jenisKelaminError) {
-      return NextResponse.json({ message: jenisKelaminError }, { status: 400 });
-    }
 
-    const tempatLahir = normalizeNullableString(body.tempat_lahir);
-    const golonganDarah = normalizeNullableString(body.golongan_darah);
-    const statusPerkawinan = normalizeNullableString(body.status_perkawinan);
-    const alamatKtp = normalizeNullableString(body.alamat_ktp);
-    const alamatKtpProvinsi = normalizeNullableString(body.alamat_ktp_provinsi);
-    const alamatKtpKota = normalizeNullableString(body.alamat_ktp_kota);
+    // Normalisasi string → null bila '' (empty)
+    const namaPengguna = normalizeNullableString(body.nama_pengguna);
+    const email = normalizeNullableString(body.email);
     const alamatDomisili = normalizeNullableString(body.alamat_domisili);
-    const alamatDomisiliProvinsi = normalizeNullableString(body.alamat_domisili_provinsi);
-    const alamatDomisiliKota = normalizeNullableString(body.alamat_domisili_kota);
-    const zonaWaktu = normalizeNullableString(body.zona_waktu);
-    const jenjangPendidikan = normalizeNullableString(body.jenjang_pendidikan);
-    const jurusan = normalizeNullableString(body.jurusan);
-    const namaInstitusi = normalizeNullableString(body.nama_institusi_pendidikan);
+    const alamatKtp = normalizeNullableString(body.alamat_ktp);
+    const kontak = normalizeNullableString(body.kontak);
+    const agama = normalizeNullableString(body.agama);
+    const golonganDarah = normalizeNullableString(body.golongan_darah);
     const nomorRekening = normalizeNullableString(body.nomor_rekening);
     const jenisBank = normalizeNullableString(body.jenis_bank);
 
+    // Upload foto bila multipart
     let uploadedUrl = null;
     if (type === 'form') {
       const file = body.file || body.foto || body.foto_profil_user;
@@ -253,40 +310,31 @@ export async function PUT(req, { params }) {
       await deleteOldFotoFromSupabase(current.foto_profil_user);
     }
 
-    // Build payload → filter allowlist
+    // Susun payload mentah (hanya kandidat 11 field)
     const raw = {
-      ...(body.nama_pengguna !== undefined && { nama_pengguna: String(body.nama_pengguna).trim() }),
-      ...(body.email !== undefined && { email: String(body.email).trim().toLowerCase() }),
-      ...(body.kontak !== undefined && { kontak: body.kontak === null ? null : String(body.kontak).trim() }),
-      ...(body.agama !== undefined && { agama: body.agama === null ? null : String(body.agama).trim() }),
+      ...(namaPengguna.defined && { nama_pengguna: namaPengguna.value }),
+      ...(email.defined && { email: email.value?.toLowerCase() ?? null }),
+      ...(alamatDomisili.defined && { alamat_domisili: alamatDomisili.value }),
+      ...(alamatKtp.defined && { alamat_ktp: alamatKtp.value }),
+      ...(kontak.defined && { kontak: kontak.value }),
+      ...(agama.defined && { agama: agama.value }),
       ...(tanggalLahirValue !== undefined && { tanggal_lahir: tanggalLahirValue }),
-      ...(tempatLahir.value !== undefined && { tempat_lahir: tempatLahir.value }),
-      ...(jenisKelaminValue !== undefined && { jenis_kelamin: jenisKelaminValue }),
-      ...(golonganDarah.value !== undefined && { golongan_darah: golonganDarah.value }),
-      ...(statusPerkawinan.value !== undefined && { status_perkawinan: statusPerkawinan.value }),
-      ...(alamatKtp.value !== undefined && { alamat_ktp: alamatKtp.value }),
-      ...(alamatKtpProvinsi.value !== undefined && { alamat_ktp_provinsi: alamatKtpProvinsi.value }),
-      ...(alamatKtpKota.value !== undefined && { alamat_ktp_kota: alamatKtpKota.value }),
-      ...(alamatDomisili.value !== undefined && { alamat_domisili: alamatDomisili.value }),
-      ...(alamatDomisiliProvinsi.value !== undefined && { alamat_domisili_provinsi: alamatDomisiliProvinsi.value }),
-      ...(alamatDomisiliKota.value !== undefined && { alamat_domisili_kota: alamatDomisiliKota.value }),
-      ...(zonaWaktu.value !== undefined && { zona_waktu: zonaWaktu.value }),
-      ...(jenjangPendidikan.value !== undefined && { jenjang_pendidikan: jenjangPendidikan.value }),
-      ...(jurusan.value !== undefined && { jurusan: jurusan.value }),
-      ...(namaInstitusi.value !== undefined && { nama_institusi_pendidikan: namaInstitusi.value }),
-      ...(tahunLulusValue !== undefined && { tahun_lulus: tahunLulusValue }),
-      ...(nomorRekening.value !== undefined && { nomor_rekening: nomorRekening.value }),
-      ...(jenisBank.value !== undefined && { jenis_bank: jenisBank.value }),
+      ...(golonganDarah.defined && { golongan_darah: golonganDarah.value }),
+      ...(nomorRekening.defined && { nomor_rekening: nomorRekening.value }),
+      ...(jenisBank.defined && { jenis_bank: jenisBank.value }),
       ...(uploadedUrl && { foto_profil_user: uploadedUrl }),
       ...(!uploadedUrl && wantsRemove ? { foto_profil_user: null } : {}),
     };
+
+    // Filter strict by allowlist
     const data = Object.fromEntries(Object.entries(raw).filter(([k]) => KARYAWAN_ALLOW.has(k)));
 
     if (Object.keys(data).length === 0) {
       return NextResponse.json({ message: 'Tidak ada field yang diubah.' }, { status: 400 });
     }
 
-    if (data.email) {
+    // Cek unik email bila diganti
+    if (data.email !== undefined && data.email !== null) {
       const exists = await db.user.findUnique({ where: { email: data.email } });
       if (exists && exists.id_user !== id) {
         return NextResponse.json({ message: 'Email sudah digunakan oleh pengguna lain.' }, { status: 409 });
@@ -300,34 +348,15 @@ export async function PUT(req, { params }) {
         id_user: true,
         nama_pengguna: true,
         email: true,
+        alamat_domisili: true,
+        alamat_ktp: true,
         kontak: true,
         agama: true,
-        foto_profil_user: true,
         tanggal_lahir: true,
-        tempat_lahir: true,
-        jenis_kelamin: true,
         golongan_darah: true,
-        status_perkawinan: true,
-        alamat_ktp: true,
-        alamat_ktp_provinsi: true,
-        alamat_ktp_kota: true,
-        alamat_domisili: true,
-        alamat_domisili_provinsi: true,
-        alamat_domisili_kota: true,
-        zona_waktu: true,
-        jenjang_pendidikan: true,
-        jurusan: true,
-        nama_institusi_pendidikan: true,
-        tahun_lulus: true,
         nomor_rekening: true,
         jenis_bank: true,
-        role: true,
-        id_departement: true,
-        id_location: true,
-        updated_at: true,
-        departement: { select: { id_departement: true, nama_departement: true } },
-        kantor: { select: { id_location: true, nama_kantor: true } },
-        jabatan: { select: { id_jabatan: true, nama_jabatan: true } },
+        foto_profil_user: true,
       },
     });
 
