@@ -294,31 +294,30 @@ model Agenda {
 }
 
 model AgendaKerja {
-  id_agenda_kerja  String          @id @default(uuid()) @db.Char(36)
-  id_absensi       String?         @db.Char(36)
-  id_agenda        String          @db.Char(36)
-  id_user          String          @db.Char(36)
-  deskripsi_kerja  String          @db.LongText
-  start_date       DateTime?       @db.DateTime(0)
-  end_date         DateTime?       @db.DateTime(0)
-  duration_seconds Int?
-  status           AgendaStatus
-  kebutuhan_agenda String?          @db.VarChar(255) // <-- PERUBAHAN DI SINI
+  id_agenda_kerja  String       @id @default(uuid()) @db.Char(36)
+  id_absensi       String?      @db.Char(36)
+  id_agenda        String       @db.Char(36)
+  id_user          String       @db.Char(36)
+  deskripsi_kerja  String       @db.LongText
+  start_date       DateTime?    @db.DateTime(0)
+  end_date         DateTime?    @db.DateTime(0)
+  duration_seconds Int?
+  status           AgendaStatus
+  kebutuhan_agenda String?      @db.VarChar(255)
 
-  created_at DateTime  @default(now()) @db.DateTime(0)
-  updated_at DateTime  @updatedAt @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
 
-  user    User     @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
-  absensi Absensi? @relation(fields: [id_absensi], references: [id_absensi], onDelete: SetNull, onUpdate: Cascade)
-  agenda  Agenda   @relation(fields: [id_agenda], references: [id_agenda], onDelete: Restrict, onUpdate: Cascade)
+  user    User     @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  absensi Absensi? @relation(fields: [id_absensi], references: [id_absensi], onDelete: SetNull, onUpdate: Cascade)
+  agenda  Agenda   @relation(fields: [id_agenda], references: [id_agenda], onDelete: Restrict, onUpdate: Cascade)
 
-  @@index([id_user, start_date])
-  @@index([id_absensi])
-  @@index([id_agenda])
-  @@map("agenda_kerja")
+  @@index([id_user, start_date])
+  @@index([id_absensi])
+  @@index([id_agenda])
+  @@map("agenda_kerja")
 }
-
 
 // ====== DIPERBARUI: Menjadi Kategori Kunjungan ======
 model KategoriKunjungan {
