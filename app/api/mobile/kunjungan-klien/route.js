@@ -10,7 +10,6 @@ import { endOfUTCDay, parseDateOnlyToUTC, parseDateTimeToUTC, startOfUTCDay } fr
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
 // Fungsi helper (ensureAuth, isFile, getSupabase, dll. tidak diubah)
-// ... (Kode helper yang sudah ada tetap di sini)
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -59,12 +58,10 @@ function isNullLike(value) {
   return false;
 }
 
-// Objek include yang diperbarui untuk mencerminkan skema baru
 const kunjunganInclude = {
   kategori: {
-    // Menggunakan relasi 'kategori'
     select: {
-      id_kategori_kunjungan: true, // Field yang benar
+      id_kategori_kunjungan: true,
       kategori_kunjungan: true,
     },
   },
@@ -87,6 +84,9 @@ export async function GET(req) {
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth.actor?.id;
+  // ===== PERUBAHAN DIMULAI DI SINI =====
+  const actorRole = auth.actor?.role; // 1. Ambil role dari user yang login
+
   if (!actorId) {
     return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
   }
@@ -97,11 +97,18 @@ export async function GET(req) {
     const rawPageSize = parseInt(searchParams.get('pageSize') || searchParams.get('perPage') || '10', 10);
     const pageSize = Math.min(Math.max(Number.isNaN(rawPageSize) ? 10 : rawPageSize, 1), 50);
     const searchTerm = (searchParams.get('q') || searchParams.get('search') || '').trim();
-    // Diperbarui untuk menggunakan id_kategori_kunjungan
     const kategoriId = (searchParams.get('id_kategori_kunjungan') || searchParams.get('kategoriId') || '').trim();
     const tanggalParam = (searchParams.get('tanggal') || '').trim();
 
-    const filters = [{ id_user: actorId }, { deleted_at: null }];
+    // 2. Inisialisasi filter hanya dengan kondisi yang selalu berlaku
+    const filters = [{ deleted_at: null }];
+
+    // 3. Tambahkan filter id_user HANYA jika role-nya bukan 'admin'
+    //    Sesuaikan 'admin' dengan nama role yang sesuai di sistem Anda.
+    if (actorRole !== 'OPERASIONAL') {
+      filters.push({ id_user: actorId });
+    }
+    // ===== AKHIR PERUBAHAN =====
 
     if (kategoriId) {
       filters.push({ id_kategori_kunjungan: kategoriId });
@@ -167,7 +174,6 @@ export async function POST(req) {
 
     const { id_kategori_kunjungan, deskripsi, tanggal, jam_mulai, jam_selesai } = body;
 
-    // Validasi input yang diperlukan
     if (isNullLike(id_kategori_kunjungan)) {
       return NextResponse.json({ message: "Field 'id_kategori_kunjungan' wajib diisi." }, { status: 400 });
     }

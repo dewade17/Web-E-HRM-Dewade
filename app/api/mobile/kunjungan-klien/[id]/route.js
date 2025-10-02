@@ -49,7 +49,7 @@ async function ensureAuth(req) {
 const kunjunganInclude = {
   kategori: {
     select: {
-      id_master_data_kunjungan: true,
+      id_kategori_kunjungan: true,
       kategori_kunjungan: true,
     },
   },

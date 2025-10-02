@@ -277,7 +277,8 @@ export async function PUT(req, { params }) {
 
     const existing = await db.kunjungan.findFirst({
       where: { id_kunjungan: id, id_user: actorId, deleted_at: null },
-      select: { id_kunjungan: true, jam_checkin: true, jam_mulai: true },
+      // Kita hanya perlu select jam_checkin untuk durasi
+      select: { id_kunjungan: true, jam_checkin: true },
     });
 
     if (!existing) {
@@ -286,28 +287,28 @@ export async function PUT(req, { params }) {
 
     const data = {
       status_kunjungan: 'selesai', // Set status menjadi 'selesai'
-    };
+    }; // Proses 'jam_checkout'
 
-    // Proses 'jam_checkout'
     if (hasOwn(body, 'jam_checkout')) {
       const value = body.jam_checkout;
       const parsed = parseDateTimeToUTC(value);
       if (!parsed) {
         return NextResponse.json({ message: "Field 'jam_checkout' tidak valid." }, { status: 400 });
       }
-      const startTime = existing.jam_checkin || existing.jam_mulai;
-      if (startTime && parsed < startTime) {
-        return NextResponse.json({ message: "'jam_checkout' tidak boleh sebelum waktu mulai/check-in." }, { status: 400 });
-      }
-      data.jam_checkout = parsed;
 
-      // Hitung durasi jika waktu mulai dan selesai ada
+      // ✨ PERUBAHAN DI SINI: Hanya menggunakan jam_checkin
+      const startTime = existing.jam_checkin;
+
+      if (startTime && parsed < startTime) {
+        return NextResponse.json({ message: "'jam_checkout' tidak boleh sebelum waktu check-in." }, { status: 400 });
+      }
+      data.jam_checkout = parsed; // Hitung durasi hanya jika waktu check-in dan check-out ada
+
       if (startTime) {
         data.duration = Math.round((parsed.getTime() - startTime.getTime()) / 1000); // Durasi dalam detik
       }
-    }
+    } // Proses field lainnya
 
-    // Proses field lainnya
     if (hasOwn(body, 'deskripsi')) data.deskripsi = String(body.deskripsi).trim();
     const kategoriId = body.id_kategori_kunjungan;
     if (kategoriId) data.id_kategori_kunjungan = String(kategoriId).trim();
@@ -321,9 +322,8 @@ export async function PUT(req, { params }) {
         }
         data[field] = numberValue;
       }
-    }
+    } // Proses unggah file
 
-    // Proses unggah file
     if (type === 'form') {
       const lampiranFile = findLampiranFile(body);
       if (lampiranFile) {
@@ -448,3 +448,4 @@ export async function PUT(req, { params }) {
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
+  
