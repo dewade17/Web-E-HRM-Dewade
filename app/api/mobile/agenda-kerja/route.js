@@ -41,6 +41,7 @@ function overlapRangeFilter(fromSOD, toEOD) {
 }
 
 const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
+const VALID_KEBUTUHAN = ['PENTING_MENDESAK', 'TIDAK_PENTING_TAPI_MENDESAK', 'PENTING_TAK_MENDESAK', 'TIDAK_PENTING_TIDAK_MENDESAK'];
 const MIN_RANGE_DATE = startOfUTCDay('1970-01-01') ?? new Date(Date.UTC(1970, 0, 1));
 const MAX_RANGE_DATE = endOfUTCDay('2999-12-31') ?? new Date(Date.UTC(2999, 11, 31, 23, 59, 59, 999));
 
@@ -75,11 +76,24 @@ export async function GET(request) {
     const to = searchParams.get('to');
 
     const where = { deleted_at: null };
+    const kebutuhan_agenda_raw = searchParams.get('kebutuhan_agenda');
     if (user_id) where.id_user = user_id;
     if (id_agenda) where.id_agenda = id_agenda;
     if (id_absensi) where.id_absensi = id_absensi;
     if (status && VALID_STATUS.includes(String(status).toLowerCase())) {
       where.status = String(status).toLowerCase();
+    }
+    if (kebutuhan_agenda_raw !== null) {
+      const trimmed = String(kebutuhan_agenda_raw || '').trim();
+      if (!trimmed) {
+        where.kebutuhan_agenda = null;
+      } else {
+        const normalized = trimmed.toUpperCase();
+        if (!VALID_KEBUTUHAN.includes(normalized)) {
+          return NextResponse.json({ ok: false, message: 'kebutuhan_agenda tidak valid' }, { status: 400 });
+        }
+        where.kebutuhan_agenda = normalized;
+      }
     }
 
     const and = [];
@@ -164,6 +178,10 @@ export async function POST(request) {
     if (duration_seconds == null && start_date && end_date) {
       duration_seconds = Math.max(0, Math.floor((end_date - start_date) / 1000));
     }
+    const kebutuhanAgenda = normalizeKebutuhanInput(body.kebutuhan_agenda);
+    if (kebutuhanAgenda.error) {
+      return NextResponse.json({ ok: false, message: kebutuhanAgenda.error }, { status: 400 });
+    }
 
     const data = {
       id_user,
@@ -174,6 +192,7 @@ export async function POST(request) {
       end_date,
       duration_seconds,
       id_absensi: body.id_absensi ?? null,
+      ...(kebutuhanAgenda.value !== undefined && { kebutuhan_agenda: kebutuhanAgenda.value }),
     };
 
     const created = await db.agendaKerja.create({
@@ -190,4 +209,18 @@ export async function POST(request) {
     console.error(err);
     return NextResponse.json({ ok: false, message: 'Gagal membuat agenda kerja' }, { status: 500 });
   }
+}
+function normalizeKebutuhanInput(input) {
+  if (input === undefined) return { value: undefined };
+  if (input === null) return { value: null };
+
+  const trimmed = String(input).trim();
+  if (!trimmed) return { value: null };
+
+  const normalized = trimmed.toUpperCase();
+  if (!VALID_KEBUTUHAN.includes(normalized)) {
+    return { error: 'kebutuhan_agenda tidak valid' };
+  }
+
+  return { value: normalized };
 }

@@ -22,6 +22,7 @@ async function ensureAuth(req) {
 }
 
 const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
+const VALID_KEBUTUHAN = ['PENTING_MENDESAK', 'TIDAK_PENTING_TAPI_MENDESAK', 'PENTING_TAK_MENDESAK', 'TIDAK_PENTING_TIDAK_MENDESAK'];
 
 function toDateOrNull(v) {
   if (!v) return null;
@@ -90,6 +91,10 @@ export async function PUT(request, { params }) {
     if (willCalcDuration && nextStart && nextEnd) {
       duration_seconds = Math.max(0, Math.floor((nextEnd - nextStart) / 1000));
     }
+    const kebutuhanAgenda = normalizeKebutuhanInput(body.kebutuhan_agenda);
+    if (kebutuhanAgenda.error) {
+      return NextResponse.json({ ok: false, message: kebutuhanAgenda.error }, { status: 400 });
+    }
 
     const data = {
       ...(body.id_user !== undefined && { id_user: String(body.id_user) }),
@@ -100,6 +105,7 @@ export async function PUT(request, { params }) {
       ...(end_date !== undefined && { end_date }),
       ...(duration_seconds !== undefined && { duration_seconds }),
       ...(body.id_absensi !== undefined && { id_absensi: body.id_absensi ?? null }),
+      ...(kebutuhanAgenda.value !== undefined && { kebutuhan_agenda: kebutuhanAgenda.value }),
     };
 
     if (data.deskripsi_kerja !== undefined && !data.deskripsi_kerja.trim()) {
@@ -128,6 +134,21 @@ export async function PUT(request, { params }) {
     console.error(err);
     return NextResponse.json({ ok: false, message: 'Gagal mengubah agenda kerja' }, { status: 500 });
   }
+}
+
+function normalizeKebutuhanInput(input) {
+  if (input === undefined) return { value: undefined };
+  if (input === null) return { value: null };
+
+  const trimmed = String(input).trim();
+  if (!trimmed) return { value: null };
+
+  const normalized = trimmed.toUpperCase();
+  if (!VALID_KEBUTUHAN.includes(normalized)) {
+    return { error: 'kebutuhan_agenda tidak valid' };
+  }
+
+  return { value: normalized };
 }
 
 // DELETE /api/agenda-kerja/[id]?hard=0|1
