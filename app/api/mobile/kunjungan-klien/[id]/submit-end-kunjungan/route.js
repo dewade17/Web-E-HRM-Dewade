@@ -409,7 +409,7 @@ export async function PUT(req, { params }) {
           };
 
           const updateData = {
-            recipient_nama_snapshot: recipient.recipient_nama_snapshot,
+            recipient_nama_snapshot: recipient.recipient_nama_snapshot, ////ada update ini 
             recipient_role_snapshot: recipient.recipient_role_snapshot,
             catatan: recipient.catatan,
             deleted_at: null,
