@@ -4,6 +4,7 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateTimeToUTC } from '@/helpers/date-helper';
+import { sendWhatsAppGroupMessage, sendWhatsAppGroupFile } from '@/app/utils/watzap/watzap.js';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
@@ -223,6 +224,25 @@ export async function PUT(req, { params }) {
       },
     });
 
+    const groupJid = process.env.WATZAP_GROUP_ID_START_KUNJUNGAN;
+    const deskripsi = (existing.deskripsi || '').trim() || 'Tidak ada deskripsi kunjungan.';
+    const lampiranUrl = updated.lampiran_kunjungan_url ?? data.lampiran_kunjungan_url ?? null;
+    const message = `Check-in kunjungan dimulai.
+Deskripsi: ${deskripsi}
+Lampiran: ${lampiranUrl || '-'}`;
+
+    if (!groupJid) {
+      console.warn('WATZAP_GROUP_ID_START_KUNJUNGAN belum diatur; melewati notifikasi grup Watzap.');
+    } else {
+      try {
+        await sendWhatsAppGroupMessage(groupJid, message);
+        if (lampiranUrl) {
+          await sendWhatsAppGroupFile(groupJid, lampiranUrl);
+        }
+      } catch (notifyErr) {
+        console.error('Gagal mengirim notifikasi Watzap untuk start kunjungan:', notifyErr);
+      }
+    }
     return NextResponse.json({ message: 'Check-in kunjungan berhasil.', data: updated });
   } catch (err) {
     console.error('PUT /mobile/kunjungan-klien/[id]/submit-start-kunjungan error:', err);

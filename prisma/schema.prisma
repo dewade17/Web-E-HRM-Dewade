@@ -378,6 +378,7 @@ model KunjunganReportRecipient {
   id_kunjungan_report_recipient String     @id @default(uuid()) @db.Char(36)
   id_kunjungan                  String     @db.Char(36)
   id_user                       String     @db.Char(36)
+  recipient_nama_snapshot       String     @db.VarChar(255) // BARU: Field ini ditambahkan untuk menyimpan nama penerima saat itu.
   recipient_role_snapshot       AtasanRole?
   catatan                       String?    @db.LongText
   status                        ReportStatus @default(terkirim)
@@ -631,6 +632,7 @@ model AbsensiReportRecipient {
   id_absensi_report_recipient String     @id @default(uuid()) @db.Char(36)
   id_absensi                  String     @db.Char(36)
   id_user                     String     @db.Char(36)
+  recipient_nama_snapshot     String     @db.VarChar(255) // BARU: Field ini ditambahkan untuk menyimpan nama penerima saat itu.
   recipient_role_snapshot     AtasanRole?
   catatan                     String?    @db.LongText
   status                      ReportStatus @default(terkirim)
