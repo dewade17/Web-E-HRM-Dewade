@@ -47,6 +47,7 @@ const kunjunganInclude = {
   reports: {
     where: { deleted_at: null },
     select: {
+      recipient_nama_snapshot: true,
       id_kunjungan_report_recipient: true,
       id_user: true,
       status: true,
@@ -89,7 +90,7 @@ export async function GET(req) {
       if (!startOfDay || !endOfDay) {
         return NextResponse.json({ message: "Parameter 'tanggal' tidak valid. Gunakan format YYYY-MM-DD." }, { status: 400 });
       }
-      
+
       where.tanggal = {
         gte: startOfDay,
         lte: endOfDay,

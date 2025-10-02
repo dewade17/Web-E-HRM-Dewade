@@ -70,6 +70,7 @@ const kunjunganInclude = {
     select: {
       id_kunjungan_report_recipient: true,
       id_user: true,
+      recipient_nama_snapshot: true,
       recipient_role_snapshot: true,
       catatan: true,
       status: true,

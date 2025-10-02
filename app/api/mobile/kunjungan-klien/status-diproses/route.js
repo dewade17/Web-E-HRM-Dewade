@@ -48,6 +48,7 @@ const kunjunganInclude = {
     where: { deleted_at: null },
     select: {
       id_kunjungan_report_recipient: true,
+      recipient_nama_snapshot: true,
       id_user: true,
       status: true,
     },

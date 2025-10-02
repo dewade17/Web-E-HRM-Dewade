@@ -59,6 +59,7 @@ const kunjunganInclude = {
       id_kunjungan_report_recipient: true,
       id_user: true,
       recipient_role_snapshot: true,
+      recipient_nama_snapshot: true,
       catatan: true,
       status: true,
       notified_at: true,

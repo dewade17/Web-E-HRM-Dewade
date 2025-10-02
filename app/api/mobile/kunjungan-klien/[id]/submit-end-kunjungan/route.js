@@ -174,6 +174,13 @@ function parseRecipientsValue(value, fieldName) {
       throw error;
     }
     seenUserIds.add(idUser);
+    const namaCandidate = item.recipient_nama_snapshot ?? item.nama ?? item.name ?? item.recipientNama ?? item.recipientName ?? item.recipientNamaSnapshot ?? item.recipientNameSnapshot ?? item.recipient_name_snapshot;
+    const recipientName = typeof namaCandidate === 'string' ? namaCandidate.trim() : '';
+    if (!recipientName) {
+      const error = new Error(`Item ke-${index + 1} pada field '${fieldName}' harus memiliki 'recipient_nama_snapshot' yang valid.`);
+      error.status = 400;
+      throw error;
+    }
 
     let roleCandidate = item.recipient_role_snapshot ?? item.role ?? item.role_snapshot ?? item.roleSnapshot ?? item.recipientRole ?? item.recipientRoleSnapshot;
     let roleValue = null;
@@ -210,6 +217,7 @@ function parseRecipientsValue(value, fieldName) {
     sanitized.push({
       id_user: idUser,
       recipient_role_snapshot: roleValue,
+      recipient_nama_snapshot: recipientName,
       status: statusValue,
       catatan: catatanValue,
     });
@@ -243,6 +251,7 @@ const recipientSelect = {
   recipient_role_snapshot: true,
   catatan: true,
   status: true,
+  recipient_nama_snapshot: true,
   notified_at: true,
   read_at: true,
   acted_at: true,
@@ -393,12 +402,14 @@ export async function PUT(req, { params }) {
           const createData = {
             id_kunjungan: id,
             id_user: recipient.id_user,
+            recipient_nama_snapshot: recipient.recipient_nama_snapshot,
             recipient_role_snapshot: recipient.recipient_role_snapshot,
             catatan: recipient.catatan,
             status: recipient.status ?? 'terkirim',
           };
 
           const updateData = {
+            recipient_nama_snapshot: recipient.recipient_nama_snapshot,
             recipient_role_snapshot: recipient.recipient_role_snapshot,
             catatan: recipient.catatan,
             deleted_at: null,
@@ -448,4 +459,3 @@ export async function PUT(req, { params }) {
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
-  

@@ -1,14 +1,15 @@
-﻿import { NextResponse } from 'next/server';
+﻿// ... (semua import dan fungsi helper tetap sama)
+import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateTimeToUTC } from '@/helpers/date-helper';
-import { sendWhatsAppGroupMessage, sendWhatsAppGroupFile } from '@/app/utils/watzap/watzap.js';
+import { sendStartKunjunganMessage, sendStartKunjunganImage } from '@/app/utils/watzap/watzap.js';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
-// ... (Fungsi helper ensureAuth, isFile, getSupabase, dll. perlu ditambahkan/disalin dari file route.js lainnya)
+// (Salin semua fungsi helper: ensureAuth, hasOwn, isFile, findLampiranFile, getSupabase, sanitizePathPart, uploadLampiranToSupabase, parseRequestBody)
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -18,32 +19,21 @@ async function ensureAuth(req) {
       const id = payload?.sub || payload?.id_user || payload?.userId;
       if (id) {
         return {
-          actor: {
-            id,
-            role: payload?.role,
-            source: 'bearer',
-          },
+          actor: { id, role: payload?.role, source: 'bearer' },
         };
       }
     } catch (_) {
       /* fallback ke NextAuth */
     }
   }
-
   const sessionOrRes = await authenticateRequest();
   if (sessionOrRes instanceof NextResponse) return sessionOrRes;
-
   const id = sessionOrRes?.user?.id || sessionOrRes?.user?.id_user;
   if (!id) {
     return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
   }
-
   return {
-    actor: {
-      id,
-      role: sessionOrRes?.user?.role,
-      source: 'session',
-    },
+    actor: { id, role: sessionOrRes?.user?.role, source: 'session' },
   };
 }
 
@@ -79,6 +69,12 @@ function sanitizePathPart(part) {
 
 async function uploadLampiranToSupabase(userId, file) {
   if (!isFile(file)) return null;
+
+  const allowedImageTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+  if (!allowedImageTypes.includes(file.type)) {
+    throw new Error(`Tipe file tidak valid. Hanya .jpg dan .png yang diizinkan, tetapi file yang diterima adalah '${file.type}'.`);
+  }
+
   const supabase = getSupabase();
 
   const arrayBuffer = await file.arrayBuffer();
@@ -124,40 +120,29 @@ async function parseRequestBody(req) {
   }
 }
 
-// 1. Perbarui field yang diizinkan
-const allowedFields = new Set([
-  'jam_checkin',
-  'start_latitude',
-  'start_longitude',
-  // Nama field untuk file
-  'lampiran_kunjungan',
-  'lampiran',
-  'lampiran_file',
-  'lampiran_kunjungan_file',
-  'file',
-]);
+const allowedFields = new Set(['jam_checkin', 'start_latitude', 'start_longitude', 'lampiran_kunjungan', 'lampiran', 'lampiran_file', 'lampiran_kunjungan_file', 'file']);
 const coordinateFields = ['start_latitude', 'start_longitude'];
 
 export async function PUT(req, { params }) {
-  const auth = await ensureAuth(req);
-  if (auth instanceof NextResponse) return auth;
-
-  const actorId = auth.actor?.id;
-  if (!actorId) {
-    return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
-  }
-
-  const { id } = params || {};
-  if (!id) {
-    return NextResponse.json({ message: "Parameter 'id' wajib diisi." }, { status: 400 });
-  }
-
   try {
+    const auth = await ensureAuth(req);
+    if (auth instanceof NextResponse) return auth;
+    const actorId = auth.actor?.id;
+    if (!actorId) {
+      return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
+    }
+
+    const { id } = params || {};
+    if (!id) {
+      return NextResponse.json({ message: "Parameter 'id' wajib diisi." }, { status: 400 });
+    }
+
     const { type, body } = await parseRequestBody(req);
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json({ message: 'Body tidak valid.' }, { status: 400 });
     }
 
+    // ... (validasi field & logika data lainnya tetap sama)
     const unknownFields = Object.keys(body).filter((key) => !allowedFields.has(key));
     if (unknownFields.length > 0) {
       return NextResponse.json({ message: `Field ${unknownFields.join(', ')} tidak diizinkan.` }, { status: 400 });
@@ -172,10 +157,9 @@ export async function PUT(req, { params }) {
     }
 
     const data = {
-      status_kunjungan: 'berlangsung', // 2. Set status menjadi 'berlangsung'
+      status_kunjungan: 'berlangsung',
     };
 
-    // Logika untuk jam_checkin
     if (hasOwn(body, 'jam_checkin')) {
       const value = body.jam_checkin;
       const parsed = parseDateTimeToUTC(value);
@@ -185,7 +169,6 @@ export async function PUT(req, { params }) {
       data.jam_checkin = parsed;
     }
 
-    // Logika untuk koordinat 'start'
     for (const field of coordinateFields) {
       if (hasOwn(body, field)) {
         const value = body[field];
@@ -197,7 +180,6 @@ export async function PUT(req, { params }) {
       }
     }
 
-    // 3. Logika untuk unggah file lampiran ke Supabase
     if (type === 'form') {
       const lampiranFile = findLampiranFile(body);
       if (lampiranFile) {
@@ -224,28 +206,31 @@ export async function PUT(req, { params }) {
       },
     });
 
-    const groupJid = process.env.WATZAP_GROUP_ID_START_KUNJUNGAN;
-    const deskripsi = (existing.deskripsi || '').trim() || 'Tidak ada deskripsi kunjungan.';
-    const lampiranUrl = updated.lampiran_kunjungan_url ?? data.lampiran_kunjungan_url ?? null;
-    const message = `Check-in kunjungan dimulai.
-Deskripsi: ${deskripsi}
-Lampiran: ${lampiranUrl || '-'}`;
+    // --- PERUBAHAN UTAMA DI SINI ---
 
-    if (!groupJid) {
-      console.warn('WATZAP_GROUP_ID_START_KUNJUNGAN belum diatur; melewati notifikasi grup Watzap.');
+    // Kirim notifikasi di latar belakang tanpa menunggu (fire and forget)
+    const deskripsi = (existing.deskripsi || '').trim() || 'Tidak ada deskripsi.';
+    const lampiranUrl = updated.lampiran_kunjungan_url ?? data.lampiran_kunjungan_url ?? null;
+
+    if (lampiranUrl) {
+      const caption = `${deskripsi}`;
+      // Hapus 'await' dan tambahkan .catch() untuk menangani error di latar belakang
+      sendStartKunjunganImage(lampiranUrl, caption).catch((err) => console.error('Gagal kirim notif gambar di latar belakang:', err));
     } else {
-      try {
-        await sendWhatsAppGroupMessage(groupJid, message);
-        if (lampiranUrl) {
-          await sendWhatsAppGroupFile(groupJid, lampiranUrl);
-        }
-      } catch (notifyErr) {
-        console.error('Gagal mengirim notifikasi Watzap untuk start kunjungan:', notifyErr);
-      }
+      const textMessage = `Check-in kunjungan dimulai.\n\nDeskripsi: ${deskripsi}\n(Tanpa lampiran)`;
+      // Hapus 'await' dan tambahkan .catch()
+      sendStartKunjunganMessage(textMessage).catch((err) => console.error('Gagal kirim notif teks di latar belakang:', err));
     }
-    return NextResponse.json({ message: 'Check-in kunjungan berhasil.', data: updated });
+
+    // Langsung kembalikan respons ke pengguna agar tidak menunggu lama
+    return NextResponse.json({ message: 'Check-in kunjungan berhasil diproses.', data: updated });
+    // --- PERUBAHAN SELESAI ---
   } catch (err) {
     console.error('PUT /mobile/kunjungan-klien/[id]/submit-start-kunjungan error:', err);
+    // Kita cek apakah error berasal dari validasi file kita
+    if (err.message.includes('Tipe file tidak valid')) {
+      return NextResponse.json({ message: err.message }, { status: 400 });
+    }
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
