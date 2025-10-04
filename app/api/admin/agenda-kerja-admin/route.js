@@ -1,4 +1,3 @@
-// app/api/agenda-kerja/route.js
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
@@ -9,15 +8,37 @@ async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
     try {
-      verifyAuthToken(auth.slice(7));
-      return true;
-    } catch {
+      const payload = verifyAuthToken(auth.slice(7));
+      return {
+        actor: {
+          id: payload?.sub || payload?.id_user || payload?.userId || null,
+          role: payload?.role || null,
+          source: 'bearer',
+        },
+      };
+    } catch (err) {
+      console.warn('Invalid bearer token for admin agenda-kerja API, fallback to session.', err);
       /* fallback ke NextAuth */
     }
   }
+
   const sessionOrRes = await authenticateRequest();
-  if (sessionOrRes instanceof NextResponse) return sessionOrRes; // unauthorized
-  return true;
+  if (sessionOrRes instanceof NextResponse) return sessionOrRes;
+
+  return {
+    actor: {
+      id: sessionOrRes?.user?.id || null,
+      role: sessionOrRes?.user?.role || null,
+      source: 'session',
+    },
+  };
+}
+
+function guardOperational(actor) {
+  if (!actor?.role || actor.role !== 'OPERASIONAL') {
+    return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL yang dapat mengakses resource ini.' }, { status: 403 });
+  }
+  return null;
 }
 
 function toDateOrNull(v) {
@@ -41,24 +62,16 @@ function overlapRangeFilter(fromSOD, toEOD) {
 }
 
 const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
-
+const VALID_KEBUTUHAN = ['PENTING_MENDESAK', 'TIDAK_PENTING_TAPI_MENDESAK', 'PENTING_TAK_MENDESAK', 'TIDAK_PENTING_TIDAK_MENDESAK'];
 const MIN_RANGE_DATE = startOfUTCDay('1970-01-01') ?? new Date(Date.UTC(1970, 0, 1));
 const MAX_RANGE_DATE = endOfUTCDay('2999-12-31') ?? new Date(Date.UTC(2999, 11, 31, 23, 59, 59, 999));
 
-/**
- * GET /api/agenda-kerja
- * Query (opsional):
- *  - user_id
- *  - id_agenda
- *  - id_absensi
- *  - status=diproses|ditunda|selesai
- *  - date=YYYY-MM-DD  (overlap 1 hari)
- *  - from=YYYY-MM-DD&to=YYYY-MM-DD  (overlap range)
- *  - page, perPage
- */
 export async function GET(request) {
-  const okAuth = await ensureAuth(request);
-  if (okAuth instanceof NextResponse) return okAuth;
+  const auth = await ensureAuth(request);
+  if (auth instanceof NextResponse) return auth;
+
+  const forbidden = guardOperational(auth.actor);
+  if (forbidden) return forbidden;
 
   try {
     const { searchParams } = new URL(request.url);
@@ -66,7 +79,7 @@ export async function GET(request) {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const perPage = Math.min(100, Math.max(1, parseInt(searchParams.get('perPage') || '20', 10)));
 
-    const user_id = searchParams.get('user_id') || undefined;
+    const userIdParam = searchParams.get('id_user') ?? searchParams.get('user_id');
     const id_agenda = searchParams.get('id_agenda') || undefined;
     const id_absensi = searchParams.get('id_absensi') || undefined;
     const status = searchParams.get('status') || undefined;
@@ -77,7 +90,7 @@ export async function GET(request) {
 
     const where = { deleted_at: null };
     const kebutuhan_agenda_raw = searchParams.get('kebutuhan_agenda');
-    if (user_id) where.id_user = user_id;
+    if (userIdParam) where.id_user = userIdParam;
     if (id_agenda) where.id_agenda = id_agenda;
     if (id_absensi) where.id_absensi = id_absensi;
     if (status && VALID_STATUS.includes(String(status).toLowerCase())) {
@@ -85,7 +98,15 @@ export async function GET(request) {
     }
     if (kebutuhan_agenda_raw !== null) {
       const trimmed = String(kebutuhan_agenda_raw || '').trim();
-      where.kebutuhan_agenda = trimmed ? trimmed : null;
+      if (!trimmed) {
+        where.kebutuhan_agenda = null;
+      } else {
+        const normalized = trimmed.toUpperCase();
+        if (!VALID_KEBUTUHAN.includes(normalized)) {
+          return NextResponse.json({ ok: false, message: 'kebutuhan_agenda tidak valid' }, { status: 400 });
+        }
+        where.kebutuhan_agenda = normalized;
+      }
     }
 
     const and = [];
@@ -122,33 +143,24 @@ export async function GET(request) {
       meta: { page, perPage, total, totalPages: Math.ceil(total / perPage) },
     });
   } catch (err) {
-    console.error(err);
+    console.error('GET /api/admin/agenda-kerja error:', err);
     return NextResponse.json({ ok: false, message: 'Failed to fetch agenda kerja' }, { status: 500 });
   }
 }
 
-/**
- * POST /api/agenda-kerja
- * Body JSON:
- *  - id_user (required)
- *  - id_agenda (required)
- *  - deskripsi_kerja (required)
- *  - status? 'diproses'|'ditunda'|'selesai' (default: 'diproses')
- *  - start_date? (ISO datetime)
- *  - end_date?   (ISO datetime)
- *  - duration_seconds? (number; jika tak dikirim & ada start/end, dihitung otomatis)
- *  - id_absensi? (string|null)
- */
 export async function POST(request) {
-  const okAuth = await ensureAuth(request);
-  if (okAuth instanceof NextResponse) return okAuth;
+  const auth = await ensureAuth(request);
+  if (auth instanceof NextResponse) return auth;
+
+  const forbidden = guardOperational(auth.actor);
+  if (forbidden) return forbidden;
 
   try {
     const body = await request.json();
 
-    const id_user = (body.id_user || '').trim();
-    const id_agenda = (body.id_agenda || '').trim();
-    const deskripsi_kerja = (body.deskripsi_kerja || '').trim();
+    const id_user = String(body.id_user || '').trim();
+    const id_agenda = String(body.id_agenda || '').trim();
+    const deskripsi_kerja = String(body.deskripsi_kerja || '').trim();
 
     if (!id_user) return NextResponse.json({ ok: false, message: 'id_user wajib diisi' }, { status: 400 });
     if (!id_agenda) return NextResponse.json({ ok: false, message: 'id_agenda wajib diisi' }, { status: 400 });
@@ -170,6 +182,7 @@ export async function POST(request) {
     if (duration_seconds == null && start_date && end_date) {
       duration_seconds = Math.max(0, Math.floor((end_date - start_date) / 1000));
     }
+
     const kebutuhanAgenda = normalizeKebutuhanInput(body.kebutuhan_agenda);
     if (kebutuhanAgenda.error) {
       return NextResponse.json({ ok: false, message: kebutuhanAgenda.error }, { status: 400 });
@@ -198,15 +211,22 @@ export async function POST(request) {
 
     return NextResponse.json({ ok: true, data: created }, { status: 201 });
   } catch (err) {
-    console.error(err);
+    console.error('POST /api/admin/agenda-kerja error:', err);
     return NextResponse.json({ ok: false, message: 'Gagal membuat agenda kerja' }, { status: 500 });
   }
 }
+
 function normalizeKebutuhanInput(input) {
   if (input === undefined) return { value: undefined };
   if (input === null) return { value: null };
 
   const trimmed = String(input).trim();
   if (!trimmed) return { value: null };
-  return { value: trimmed };
+
+  const normalized = trimmed.toUpperCase();
+  if (!VALID_KEBUTUHAN.includes(normalized)) {
+    return { error: 'kebutuhan_agenda tidak valid' };
+  }
+
+  return { value: normalized };
 }

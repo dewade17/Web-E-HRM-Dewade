@@ -508,8 +508,10 @@ model Istirahat {
   tanggal_istirahat   DateTime  @db.Date
   start_istirahat     DateTime  @db.DateTime(0)
   end_istirahat       DateTime? @db.DateTime(0)
-  istirahat_latitude  Decimal?  @db.Decimal(10, 6)
-  istirahat_longitude Decimal?  @db.Decimal(10, 6)
+  start_istirahat_latitude  Decimal?  @db.Decimal(10, 6)
+  start_istirahat_longitude Decimal?  @db.Decimal(10, 6)
+  end_istirahat_latitude  Decimal?  @db.Decimal(10, 6)
+  end_istirahat_longitude Decimal?  @db.Decimal(10, 6)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
