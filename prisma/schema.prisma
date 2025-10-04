@@ -137,10 +137,9 @@ model Location {
   latitude    Decimal   @db.Decimal(10, 6)
   longitude   Decimal   @db.Decimal(10, 6)
   radius      Int?
-
-  created_at DateTime  @default(now()) @db.DateTime(0)
-  updated_at DateTime  @updatedAt @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
+  created_at  DateTime  @default(now()) @db.DateTime(0)
+  updated_at  DateTime  @updatedAt @db.DateTime(0)
+  deleted_at  DateTime? @db.DateTime(0)
 
   Absensi_datang Absensi[] @relation("absen_datang")
   Absensi_pulang Absensi[] @relation("absen_pulang")
@@ -191,10 +190,9 @@ model Cuti {
   alasan            String?       @db.LongText
   status            ApproveStatus
   current_level     Int?
-
   // ----- PENAMBAHAN DARI DIAGRAM -----
-  impact    Impact?     // Dari diagram Izin Hari
-  hand_over String?     @db.LongText // Dari diagram Cuti & Izin Hari
+  impact            Impact?       // Dari diagram Izin Hari
+  hand_over         String?       @db.LongText // Dari diagram Cuti & Izin Hari
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -221,7 +219,7 @@ model CutiApproval {
   updated_at DateTime  @updatedAt @db.DateTime(0)
   deleted_at DateTime? @db.DateTime(0)
 
-  cuti     Cuti @relation(fields: [id_cuti], references: [id_cuti], onDelete: Cascade, onUpdate: Cascade)
+  cuti     Cuti  @relation(fields: [id_cuti], references: [id_cuti], onDelete: Cascade, onUpdate: Cascade)
   approver User? @relation("CutiApproval_approver_user_idToUser", fields: [approver_user_id], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([id_cuti, level])
@@ -250,10 +248,9 @@ model PolaKerja {
   jam_istirahat_mulai   DateTime? @db.DateTime(0)
   jam_istirahat_selesai DateTime? @db.DateTime(0)
   maks_jam_istirahat    Int?
-
-  created_at DateTime  @default(now()) @db.DateTime(0)
-  updated_at DateTime  @updatedAt @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
+  created_at            DateTime  @default(now()) @db.DateTime(0)
+  updated_at            DateTime  @updatedAt @db.DateTime(0)
+  deleted_at            DateTime? @db.DateTime(0)
 
   shifts ShiftKerja[]
 
@@ -273,7 +270,7 @@ model ShiftKerja {
   updated_at DateTime  @updatedAt @db.DateTime(0)
   deleted_at DateTime? @db.DateTime(0)
 
-  user      User       @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  user      User      @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
   polaKerja PolaKerja? @relation(fields: [id_pola_kerja], references: [id_pola_kerja], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([id_user, tanggal_mulai])
@@ -357,7 +354,7 @@ model Kunjungan {
   deleted_at DateTime? @db.DateTime(0)
 
   user     User                     @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
-  kategori KategoriKunjungan?     @relation(fields: [id_kategori_kunjungan], references: [id_kategori_kunjungan], onDelete: SetNull, onUpdate: Cascade) // Relasi diperbarui
+  kategori KategoriKunjungan?      @relation(fields: [id_kategori_kunjungan], references: [id_kategori_kunjungan], onDelete: SetNull, onUpdate: Cascade) // Relasi diperbarui
   reports  KunjunganReportRecipient[]
 
   @@index([id_user, tanggal])
@@ -369,7 +366,7 @@ model KunjunganReportRecipient {
   id_kunjungan_report_recipient String     @id @default(uuid()) @db.Char(36)
   id_kunjungan                  String     @db.Char(36)
   id_user                       String     @db.Char(36)
-  recipient_nama_snapshot       String     @db.VarChar(255) 
+  recipient_nama_snapshot       String     @db.VarChar(255)
   recipient_role_snapshot       AtasanRole?
   catatan                       String?    @db.LongText
   status                        ReportStatus @default(terkirim)
@@ -475,7 +472,7 @@ model Departement {
 
   users        User[]
   jabatan      Jabatan[]
-  supervisor   User?        @relation("SupervisorForDepartment", fields: [id_supervisor], references: [id_user], onDelete: SetNull, onUpdate: Cascade)
+  supervisor   User?   @relation("SupervisorForDepartment", fields: [id_supervisor], references: [id_user], onDelete: SetNull, onUpdate: Cascade)
   StoryPlanner StoryPlanner[]
 
   @@map("departement")
@@ -502,16 +499,16 @@ model Jabatan {
 }
 
 model Istirahat {
-  id_istirahat        String    @id @default(uuid()) @db.Char(36)
-  id_user             String    @db.Char(36)
-  id_absensi          String    @db.Char(36)
-  tanggal_istirahat   DateTime  @db.Date
-  start_istirahat     DateTime  @db.DateTime(0)
-  end_istirahat       DateTime? @db.DateTime(0)
+  id_istirahat              String    @id @default(uuid()) @db.Char(36)
+  id_user                   String    @db.Char(36)
+  id_absensi                String    @db.Char(36)
+  tanggal_istirahat         DateTime  @db.Date
+  start_istirahat           DateTime  @db.DateTime(0)
+  end_istirahat             DateTime? @db.DateTime(0)
   start_istirahat_latitude  Decimal?  @db.Decimal(10, 6)
   start_istirahat_longitude Decimal?  @db.Decimal(10, 6)
-  end_istirahat_latitude  Decimal?  @db.Decimal(10, 6)
-  end_istirahat_longitude Decimal?  @db.Decimal(10, 6)
+  end_istirahat_latitude    Decimal?  @db.Decimal(10, 6)
+  end_istirahat_longitude   Decimal?  @db.Decimal(10, 6)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -684,6 +681,21 @@ model Notification {
   @@map("notifications")
 }
 
+// BARU: Model untuk menyimpan template notifikasi yang bisa di-custom
+model NotificationTemplate {
+  id              String   @id @default(uuid())
+  eventTrigger    String   @unique // Kode unik untuk pemicu, cth: REMINDER_CHECK_IN
+  description     String   // Deskripsi untuk HR, cth: "Pengingat 15 menit sebelum jam masuk"
+  titleTemplate   String   @map("title_template")
+  bodyTemplate    String   @db.Text @map("body_template")
+  placeholders    String?  // Variabel yang bisa digunakan, cth: "{nama_karyawan}, {jam_masuk}"
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("notification_templates")
+}
+
 model Lembur {
   id_lembur     String       @id @default(uuid()) @db.Char(36)
   id_user       String       @db.Char(36)
@@ -693,10 +705,9 @@ model Lembur {
   alasan        String?      @db.LongText
   status        LemburStatus
   current_level Int?
-
-  created_at DateTime  @default(now()) @db.DateTime(0)
-  updated_at DateTime  @updatedAt @db.DateTime(0)
-  deleted_at DateTime? @db.DateTime(0)
+  created_at    DateTime     @default(now()) @db.DateTime(0)
+  updated_at    DateTime     @updatedAt @db.DateTime(0)
+  deleted_at    DateTime?    @db.DateTime(0)
 
   user      User           @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
   approvals LemburApproval[]
