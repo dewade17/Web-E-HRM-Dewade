@@ -3,8 +3,8 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
-import { extractWeeklyScheduleInput, normalizeWeeklySchedule, serializeHariKerja, transformShiftRecord } from './schedule-utils';
-
+import { extractWeeklyScheduleInput, normalizeWeeklySchedule, serializeHariKerja, transformShiftRecord } from './schedul-utils';
+import { sendNotification } from '@/app/utils/services/notificationService';
 const SHIFT_STATUS = ['KERJA', 'LIBUR'];
 
 async function ensureAuth(req) {
@@ -85,6 +85,16 @@ export async function GET(req) {
         where.id_pola_kerja = null;
       } else if (trimmed) {
         where.id_pola_kerja = trimmed;
+      }
+    }
+
+    const jabatanParam = searchParams.get('id_jabatan');
+    if (jabatanParam !== null) {
+      const trimmed = jabatanParam.trim();
+      if (trimmed === 'null') {
+        where.user = { ...(where.user ?? {}), id_jabatan: null };
+      } else if (trimmed) {
+        where.user = { ...(where.user ?? {}), id_jabatan: trimmed };
       }
     }
 
@@ -173,11 +183,13 @@ export async function POST(req) {
     if (!idUser) {
       return NextResponse.json({ message: "Field 'id_user' wajib diisi." }, { status: 400 });
     }
-    const userExists = await db.user.findUnique({ where: { id_user: idUser }, select: { id_user: true } });
-    if (!userExists) {
+    const targetUser = await db.user.findUnique({
+      where: { id_user: idUser },
+      select: { id_user: true, nama_pengguna: true },
+    });
+    if (!targetUser) {
       return NextResponse.json({ message: 'User tidak ditemukan.' }, { status: 404 });
     }
-
     const statusRaw = body.status ? String(body.status).toUpperCase().trim() : '';
     if (!SHIFT_STATUS.includes(statusRaw)) {
       return NextResponse.json({ message: "Field 'status' tidak valid." }, { status: 400 });
@@ -262,6 +274,26 @@ export async function POST(req) {
         created_at: true,
       },
     });
+
+    const formatDateOnly = (value) => {
+      if (!value) return '-';
+      try {
+        return value.toISOString().slice(0, 10);
+      } catch (formatErr) {
+        console.warn('Gagal memformat tanggal shift untuk notifikasi:', formatErr);
+        return '-';
+      }
+    };
+
+    const notificationPayload = {
+      nama_karyawan: targetUser.nama_pengguna || 'Karyawan',
+      periode_mulai: formatDateOnly(created.tanggal_mulai),
+      periode_selesai: formatDateOnly(created.tanggal_selesai),
+    };
+
+    console.info('[NOTIF] Mengirim notifikasi NEW_SHIFT_PUBLISHED untuk user %s dengan payload %o', created.id_user, notificationPayload);
+    await sendNotification('NEW_SHIFT_PUBLISHED', created.id_user, notificationPayload);
+    console.info('[NOTIF] Notifikasi NEW_SHIFT_PUBLISHED selesai diproses untuk user %s', created.id_user);
 
     return NextResponse.json({ message: 'Shift kerja dibuat.', data: transformShiftRecord(created) }, { status: 201 });
   } catch (err) {
