@@ -53,10 +53,10 @@ export async function GET(req) {
       ...(departementId ? { id_departement: departementId } : {}),
       ...(locationId ? { id_location: locationId } : {}),
       ...(jabatanId ? { id_jabatan: jabatanId } : {}),
-      ...(namaPengguna ? { nama_pengguna: { contains: namaPengguna, mode: 'insensitive' } } : {}),
+      ...(namaPengguna ? { nama_pengguna: { contains: namaPengguna } } : {}),
       ...(search
         ? {
-            OR: [{ nama_pengguna: { contains: search, mode: 'insensitive' } }, { email: { contains: search, mode: 'insensitive' } }, { kontak: { contains: search, mode: 'insensitive' } }],
+            OR: [{ nama_pengguna: { contains: search } }, { email: { contains: search } }, { kontak: { contains: search } }],
           }
         : {}),
     };
