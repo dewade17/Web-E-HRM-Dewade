@@ -88,6 +88,16 @@ export async function GET(req) {
       }
     }
 
+    const jabatanParam = searchParams.get('id_jabatan');
+    if (jabatanParam !== null) {
+      const trimmed = jabatanParam.trim();
+      if (trimmed === 'null') {
+        where.user = { ...(where.user ?? {}), id_jabatan: null };
+      } else if (trimmed) {
+        where.user = { ...(where.user ?? {}), id_jabatan: trimmed };
+      }
+    }
+
     const status = (searchParams.get('status') || '').trim();
     if (status) {
       const normalized = status.toUpperCase();

@@ -39,7 +39,8 @@ export async function GET(req) {
     const role = (searchParams.get('role') || '').trim();
     const departementId = (searchParams.get('departementId') || '').trim();
     const locationId = (searchParams.get('locationId') || '').trim();
-
+    const jabatanId = (searchParams.get('jabatanId') || '').trim();
+    const namaPengguna = (searchParams.get('namaPengguna') || '').trim();
     const includeDeleted = searchParams.get('includeDeleted') === '1';
     const orderByParam = (searchParams.get('orderBy') || 'created_at').trim();
     const orderBy = ALLOWED_ORDER_BY.has(orderByParam) ? orderByParam : 'created_at';
@@ -51,6 +52,8 @@ export async function GET(req) {
       ...(role ? { role } : {}),
       ...(departementId ? { id_departement: departementId } : {}),
       ...(locationId ? { id_location: locationId } : {}),
+      ...(jabatanId ? { id_jabatan: jabatanId } : {}),
+      ...(namaPengguna ? { nama_pengguna: { contains: namaPengguna, mode: 'insensitive' } } : {}),
       ...(search
         ? {
             OR: [{ nama_pengguna: { contains: search, mode: 'insensitive' } }, { email: { contains: search, mode: 'insensitive' } }, { kontak: { contains: search, mode: 'insensitive' } }],
