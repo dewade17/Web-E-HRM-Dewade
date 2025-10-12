@@ -1,8 +1,10 @@
 // app/api/mobile/auth/getdataprivate/route.js
 import { NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import db from '@/lib/prisma';
-import { verifyAuthToken } from '@/lib/jwt'; // util kamu: signAuthToken/verifyAuthToken
+import db from '../../../../../lib/prisma';
+import { verifyAuthToken } from '../../../../../lib/jwt'; // util kamu: signAuthToken/verifyAuthToken
+
+export const dynamic = 'force-dynamic'; // Tambahkan baris ini
 
 export async function GET(req) {
   try {

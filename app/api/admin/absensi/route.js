@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequest } from '@/app/utils/auth/authUtils';
-import db from '@/lib/prisma';
-import { verifyAuthToken } from '@/lib/jwt';
+import { authenticateRequest } from '../../../../app/utils/auth/authUtils';
+import db from '../../../../lib/prisma';
+import { verifyAuthToken } from '../../../../lib/jwt';
 
 const REPORT_STATUSES = new Set(['terkirim', 'disetujui', 'ditolak']);
 
@@ -37,10 +37,7 @@ export async function GET(req) {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const perPage = Math.min(100, Math.max(1, parseInt(searchParams.get('perPage') || '20', 10)));
 
-    const where = {
-      deleted_at: null,
-      id_user: actorId,
-    };
+    const where = { deleted_at: null, id_user: actorId };
 
     if (statusParam) {
       if (!REPORT_STATUSES.has(statusParam)) {
@@ -65,6 +62,8 @@ export async function GET(req) {
                   nama_pengguna: true,
                   email: true,
                   role: true,
+                  foto_profil_user: true,
+                  jabatan: { select: { id_jabatan: true, nama_jabatan: true } },
                   departement: { select: { id_departement: true, nama_departement: true } },
                 },
               },

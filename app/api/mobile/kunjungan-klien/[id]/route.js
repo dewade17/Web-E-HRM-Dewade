@@ -9,6 +9,14 @@ import { parseDateOnlyToUTC, parseDateTimeToUTC } from '@/helpers/date-helper';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
+// === RBAC helpers (DITAMBAHKAN) ===
+const normRole = (r) =>
+  String(r || '')
+    .trim()
+    .toUpperCase();
+const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR'].includes(normRole(role));
+const canManageAll = (role) => ['OPERASIONAL'].includes(normRole(role)); // hanya Operasional yang full manage
+
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -76,7 +84,6 @@ const coordinateFields = ['start_latitude', 'start_longitude', 'end_latitude', '
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
 }
-
 function isNullLike(value) {
   if (value === null || value === undefined) return true;
   if (typeof value === 'string') {
@@ -87,7 +94,6 @@ function isNullLike(value) {
   }
   return false;
 }
-
 function isFile(value) {
   return typeof File !== 'undefined' && value instanceof File;
 }
@@ -96,14 +102,12 @@ function findLampiranFile(body) {
   const candidates = [body.lampiran_kunjungan, body.lampiran, body.lampiran_file, body.lampiran_kunjungan_file, body.file];
   return candidates.find((candidate) => isFile(candidate) && candidate.size > 0) || null;
 }
-
 function getSupabase() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error('Supabase env tidak lengkap.');
   return createClient(url, key);
 }
-
 function extractBucketPath(publicUrl) {
   if (!publicUrl) return null;
   try {
@@ -116,7 +120,6 @@ function extractBucketPath(publicUrl) {
   }
   return null;
 }
-
 async function deleteLampiranFromSupabase(publicUrl) {
   if (!publicUrl) return;
   const info = extractBucketPath(publicUrl);
@@ -124,19 +127,15 @@ async function deleteLampiranFromSupabase(publicUrl) {
   try {
     const supabase = getSupabase();
     const { error } = await supabase.storage.from(info.bucket).remove([info.path]);
-    if (error) {
-      console.warn('Gagal hapus lampiran lama:', error.message);
-    }
+    if (error) console.warn('Gagal hapus lampiran lama:', error.message);
   } catch (err) {
     console.warn('Gagal hapus lampiran lama:', err?.message || err);
   }
 }
-
 function sanitizePathPart(part) {
   const safe = String(part || '').replace(/[^a-zA-Z0-9-_]/g, '_');
   return safe || 'unknown';
 }
-
 async function uploadLampiranToSupabase(userId, file) {
   if (!isFile(file)) return null;
   const supabase = getSupabase();
@@ -155,18 +154,13 @@ async function uploadLampiranToSupabase(userId, file) {
     upsert: true,
     contentType: file.type || 'application/octet-stream',
   });
-  if (uploadError) {
-    throw new Error(`Gagal upload lampiran: ${uploadError.message}`);
-  }
+  if (uploadError) throw new Error(`Gagal upload lampiran: ${uploadError.message}`);
 
   const { data: publicData, error: publicError } = supabase.storage.from(SUPABASE_BUCKET).getPublicUrl(path);
-  if (publicError) {
-    throw new Error(`Gagal membuat URL lampiran: ${publicError.message}`);
-  }
+  if (publicError) throw new Error(`Gagal membuat URL lampiran: ${publicError.message}`);
 
   return publicData?.publicUrl || null;
 }
-
 async function parseRequestBody(req) {
   const contentType = req.headers.get('content-type') || '';
   if (contentType.includes('multipart/form-data')) {
@@ -177,7 +171,6 @@ async function parseRequestBody(req) {
     }
     return { type: 'form', body: obj };
   }
-
   try {
     const body = await req.json();
     return { type: 'json', body };
@@ -193,6 +186,8 @@ export async function GET(req, { params }) {
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth.actor?.id;
+  const role = auth.actor?.role;
+
   if (!actorId) {
     return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
   }
@@ -206,8 +201,8 @@ export async function GET(req, { params }) {
     const data = await db.kunjungan.findFirst({
       where: {
         id_kunjungan: id,
-        id_user: actorId,
         deleted_at: null,
+        ...(canSeeAll(role) ? {} : { id_user: actorId }), // HR/Direktur/Operasional boleh lihat semua
       },
       include: kunjunganInclude,
     });
@@ -228,6 +223,9 @@ export async function PUT(req, { params }) {
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth.actor?.id;
+  const role = auth.actor?.role;
+  const canManage = canManageAll(role); // hanya Operasional boleh kelola semua
+
   if (!actorId) {
     return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
   }
@@ -244,8 +242,8 @@ export async function PUT(req, { params }) {
     const existing = await db.kunjungan.findFirst({
       where: {
         id_kunjungan: id,
-        id_user: actorId,
         deleted_at: null,
+        ...(canManage ? {} : { id_user: actorId }),
       },
     });
 
@@ -262,11 +260,7 @@ export async function PUT(req, { params }) {
 
     if (hasOwn(body, 'id_master_data_kunjungan')) {
       const rawKategori = body.id_master_data_kunjungan;
-      if (isNullLike(rawKategori)) {
-        data.id_master_data_kunjungan = null;
-      } else {
-        data.id_master_data_kunjungan = String(rawKategori).trim();
-      }
+      data.id_master_data_kunjungan = isNullLike(rawKategori) ? null : String(rawKategori).trim();
     }
 
     if (hasOwn(body, 'tanggal')) {
@@ -287,9 +281,7 @@ export async function PUT(req, { params }) {
         data.jam_mulai = null;
       } else {
         const jamMulai = parseDateTimeToUTC(body.jam_mulai);
-        if (!jamMulai) {
-          return NextResponse.json({ message: "Field 'jam_mulai' tidak valid." }, { status: 400 });
-        }
+        if (!jamMulai) return NextResponse.json({ message: "Field 'jam_mulai' tidak valid." }, { status: 400 });
         data.jam_mulai = jamMulai;
       }
     }
@@ -299,29 +291,17 @@ export async function PUT(req, { params }) {
         data.jam_selesai = null;
       } else {
         const jamSelesai = parseDateTimeToUTC(body.jam_selesai);
-        if (!jamSelesai) {
-          return NextResponse.json({ message: "Field 'jam_selesai' tidak valid." }, { status: 400 });
-        }
+        if (!jamSelesai) return NextResponse.json({ message: "Field 'jam_selesai' tidak valid." }, { status: 400 });
         data.jam_selesai = jamSelesai;
       }
     }
 
     if (hasOwn(body, 'deskripsi')) {
-      if (isNullLike(body.deskripsi)) {
-        data.deskripsi = null;
-      } else {
-        const str = String(body.deskripsi).trim();
-        data.deskripsi = str.length > 0 ? str : null;
-      }
+      data.deskripsi = isNullLike(body.deskripsi) ? null : String(body.deskripsi).trim() || null;
     }
 
     if (hasOwn(body, 'hand_over')) {
-      if (isNullLike(body.hand_over)) {
-        data.hand_over = null;
-      } else {
-        const str = String(body.hand_over).trim();
-        data.hand_over = str.length > 0 ? str : null;
-      }
+      data.hand_over = isNullLike(body.hand_over) ? null : String(body.hand_over).trim() || null;
     }
 
     for (const field of coordinateFields) {
@@ -338,6 +318,7 @@ export async function PUT(req, { params }) {
       data[field] = numberValue;
     }
 
+    // Lampiran (form / url)
     let lampiranProvided = false;
     if (type === 'form') {
       const lampiranFile = findLampiranFile(body);
@@ -347,7 +328,6 @@ export async function PUT(req, { params }) {
         lampiranProvided = true;
       }
     }
-
     if (!lampiranProvided && hasOwn(body, 'lampiran_kunjungan_url') && !isFile(body.lampiran_kunjungan_url)) {
       const rawLampiran = body.lampiran_kunjungan_url;
       lampiranUrlValue = isNullLike(rawLampiran) ? null : String(rawLampiran).trim();
@@ -399,6 +379,9 @@ export async function DELETE(req, { params }) {
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth.actor?.id;
+  const role = auth.actor?.role;
+  const canManage = canManageAll(role); // hanya Operasional boleh hapus rencana orang lain
+
   if (!actorId) {
     return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
   }
@@ -412,8 +395,8 @@ export async function DELETE(req, { params }) {
     const existing = await db.kunjungan.findFirst({
       where: {
         id_kunjungan: id,
-        id_user: actorId,
         deleted_at: null,
+        ...(canManage ? {} : { id_user: actorId }),
       },
     });
 

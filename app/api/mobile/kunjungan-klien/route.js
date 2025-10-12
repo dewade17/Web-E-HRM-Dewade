@@ -5,11 +5,18 @@ import { createClient } from '@supabase/supabase-js';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
-import { endOfUTCDay, parseDateOnlyToUTC, parseDateTimeToUTC, startOfUTCDay } from '@/helpers/date-helper';
+import { parseDateOnlyToUTC, parseDateTimeToUTC } from '@/helpers/date-helper';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
-// Fungsi helper (ensureAuth, isFile, getSupabase, dll. tidak diubah)
+// === RBAC helpers (DITAMBAHKAN) ===
+const normRole = (r) =>
+  String(r || '')
+    .trim()
+    .toUpperCase();
+const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR'].includes(normRole(role));
+const canManageAll = (role) => ['OPERASIONAL'].includes(normRole(role)); // hanya Operasional yang full manage
+
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -85,8 +92,7 @@ export async function GET(req) {
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth.actor?.id;
-  // ===== PERUBAHAN DIMULAI DI SINI =====
-  const actorRole = auth.actor?.role; // 1. Ambil role dari user yang login
+  const actorRole = auth.actor?.role; // ambil role
 
   if (!actorId) {
     return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
@@ -101,15 +107,12 @@ export async function GET(req) {
     const kategoriId = (searchParams.get('id_kategori_kunjungan') || searchParams.get('kategoriId') || '').trim();
     const tanggalParam = (searchParams.get('tanggal') || '').trim();
 
-    // 2. Inisialisasi filter hanya dengan kondisi yang selalu berlaku
     const filters = [{ deleted_at: null }];
 
-    // 3. Tambahkan filter id_user HANYA jika role-nya bukan 'admin'
-    //    Sesuaikan 'admin' dengan nama role yang sesuai di sistem Anda.
-    if (actorRole !== 'OPERASIONAL') {
+    // RBAC: HR, DIREKTUR, OPERASIONAL bisa lihat semua
+    if (!canSeeAll(actorRole)) {
       filters.push({ id_user: actorId });
     }
-    // ===== AKHIR PERUBAHAN =====
 
     if (kategoriId) {
       filters.push({ id_kategori_kunjungan: kategoriId });
@@ -166,6 +169,8 @@ export async function POST(req) {
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth.actor?.id;
+  const actorRole = auth.actor?.role;
+
   if (!actorId) {
     return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
   }
@@ -197,8 +202,11 @@ export async function POST(req) {
       return NextResponse.json({ message: "Field 'jam_selesai' tidak valid." }, { status: 400 });
     }
 
+    // RBAC: Operasional boleh menetapkan rencana untuk user lain; lainnya pakai dirinya sendiri
+    const targetUserId = canManageAll(actorRole) && !isNullLike(body.id_user) ? String(body.id_user).trim() : actorId;
+
     const data = {
-      id_user: actorId,
+      id_user: targetUserId, // <-- perbaikan inti
       id_kategori_kunjungan: String(id_kategori_kunjungan).trim(),
       deskripsi: isNullLike(deskripsi) ? null : String(deskripsi).trim(),
       tanggal: tanggalDate,
