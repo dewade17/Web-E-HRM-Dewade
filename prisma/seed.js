@@ -3,6 +3,15 @@ const prisma = new PrismaClient();
 
 // Daftar template notifikasi default
 const notificationTemplates = [
+  // --- Notifikasi Wajah (BARU) ---
+  {
+    eventTrigger: 'FACE_REGISTRATION_SUCCESS',
+    description: 'Konfirmasi saat karyawan berhasil mendaftarkan wajah',
+    titleTemplate: '✅ Wajah Berhasil Terdaftar',
+    bodyTemplate: 'Halo {nama_karyawan}, wajah Anda telah berhasil terdaftar pada sistem E-HRM. Anda kini dapat menggunakan fitur absensi wajah.',
+    placeholders: '{nama_karyawan}',
+  },
+
   // --- Shift Kerja ---
   {
     eventTrigger: 'NEW_SHIFT_PUBLISHED',
@@ -26,6 +35,22 @@ const notificationTemplates = [
     placeholders: '{nama_karyawan}, {nama_shift}, {jam_masuk}',
   },
 
+  // --- Absensi (BARU) ---
+  {
+    eventTrigger: 'SUCCESS_CHECK_IN',
+    description: 'Konfirmasi saat karyawan berhasil melakukan check-in, menyertakan status (tepat/terlambat)',
+    titleTemplate: '✅ Check-in Berhasil',
+    bodyTemplate: 'Absensi masuk Anda telah tercatat pada {jam_masuk} dengan status: {status_absensi}.',
+    placeholders: '{jam_masuk}, {status_absensi}, {nama_karyawan}',
+  },
+  {
+    eventTrigger: 'SUCCESS_CHECK_OUT',
+    description: 'Konfirmasi saat karyawan berhasil melakukan check-out',
+    titleTemplate: '👋 Sampai Jumpa!',
+    bodyTemplate: 'Absensi pulang Anda telah tercatat pada {jam_pulang}. Total durasi kerja Anda: {total_jam_kerja}.',
+    placeholders: '{jam_pulang}, {total_jam_kerja}, {nama_karyawan}',
+  },
+
   // --- Agenda Kerja ---
   {
     eventTrigger: 'NEW_AGENDA_ASSIGNED',
@@ -42,13 +67,6 @@ const notificationTemplates = [
     placeholders: '{nama_karyawan}, {judul_agenda}',
   },
   {
-    eventTrigger: 'AGENDA_REMINDER_END',
-    description: 'Pengingat saat mendekati waktu selesai agenda kerja',
-    titleTemplate: '⏳ Agenda Kerja Hampir Selesai',
-    bodyTemplate: 'Agenda "{judul_agenda}" dijadwalkan selesai pada {tanggal_selesai_display}. Pastikan progres Anda sudah diperbarui.',
-    placeholders: '{nama_karyawan}, {judul_agenda}, {tanggal_selesai}, {tanggal_selesai_display}',
-  },
-  {
     eventTrigger: 'AGENDA_OVERDUE',
     description: 'Notifikasi saat agenda kerja melewati batas waktu',
     titleTemplate: '⏰ Agenda Melewati Batas Waktu',
@@ -63,7 +81,7 @@ const notificationTemplates = [
     placeholders: '{nama_karyawan}, {judul_agenda}, {nama_komentator}',
   },
 
-  // --- Kunjungan Klien ---
+  // --- Kunjungan Klien (Dipertahankan dari List Awal karena Unik) ---
   {
     eventTrigger: 'NEW_CLIENT_VISIT_ASSIGNED',
     description: 'Notifikasi saat karyawan mendapatkan jadwal kunjungan klien baru',
@@ -85,7 +103,8 @@ const notificationTemplates = [
     bodyTemplate: 'Kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} akan berakhir pada {waktu_selesai_display}. Mohon lengkapi laporan kunjungan.',
     placeholders: '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan_display}, {waktu_selesai_display}',
   },
-  // --- Istirahat (BARU DITAMBAHKAN) ---
+
+  // --- Istirahat ---
   {
     eventTrigger: 'SUCCESS_START_BREAK',
     description: 'Konfirmasi saat karyawan memulai istirahat',
@@ -108,6 +127,7 @@ const notificationTemplates = [
     placeholders: '{nama_karyawan}, {maks_jam_istirahat}',
   },
 ];
+
 async function main() {
   console.log(`Mulai proses seeding...`);
 
