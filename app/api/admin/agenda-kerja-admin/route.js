@@ -70,6 +70,28 @@ function formatDateTime(value) {
   }
 }
 
+function formatDateTimeDisplay(value) {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('id-ID', {
+      dateStyle: 'long',
+      timeStyle: 'short',
+    }).format(value instanceof Date ? value : new Date(value));
+  } catch (err) {
+    console.warn('Gagal memformat tanggal agenda untuk tampilan (admin):', err);
+    return '';
+  }
+}
+
+function formatStatusDisplay(status) {
+  if (!status) return '';
+  return String(status)
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
 
 const MIN_RANGE_DATE = startOfUTCDay('1970-01-01') ?? new Date(Date.UTC(1970, 0, 1));
@@ -226,17 +248,33 @@ export async function POST(request) {
       },
     });
 
+    const agendaTitle = created.agenda?.nama_agenda || 'Agenda Baru';
+    const friendlyDeadline = formatDateTimeDisplay(created.end_date);
     const notificationPayload = {
       nama_karyawan: created.user?.nama_pengguna || 'Karyawan',
-      judul_agenda: created.agenda?.nama_agenda || 'Agenda Baru',
+      judul_agenda: agendaTitle,
       tanggal_deadline: formatDateTime(created.end_date),
+      tanggal_deadline_display: friendlyDeadline,
       pemberi_tugas: 'Panel Admin',
+      title: `Agenda Kerja Baru: ${agendaTitle}`,
+      body: [`Anda mendapatkan agenda kerja baru "${agendaTitle}".`, friendlyDeadline ? `Selesaikan sebelum ${friendlyDeadline}.` : ''].filter(Boolean).join(' ').trim(),
+      related_table: 'agenda_kerja',
+      related_id: created.id_agenda_kerja,
+      deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
+    };
+    const notificationOptions = {
+      dedupeKey: `NEW_AGENDA_ASSIGNED:${created.id_agenda_kerja}`,
+      collapseKey: `AGENDA_${created.id_agenda_kerja}`,
+      deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
     };
 
     console.info('[NOTIF] (Admin) Mengirim notifikasi NEW_AGENDA_ASSIGNED untuk user %s dengan payload %o', created.id_user, notificationPayload);
-    await sendNotification('NEW_AGENDA_ASSIGNED', created.id_user, notificationPayload);
-    console.info('[NOTIF] (Admin) Notifikasi NEW_AGENDA_ASSIGNED selesai diproses untuk user %s', created.id_user);
-
+    try {
+      await sendNotification('NEW_AGENDA_ASSIGNED', created.id_user, notificationPayload, notificationOptions);
+      console.info('[NOTIF] (Admin) Notifikasi NEW_AGENDA_ASSIGNED selesai diproses untuk user %s', created.id_user);
+    } catch (notifErr) {
+      console.error('[NOTIF] (Admin) Gagal mengirim notifikasi NEW_AGENDA_ASSIGNED untuk user %s: %o', created.id_user, notifErr);
+    }
     return NextResponse.json({ ok: true, data: created }, { status: 201 });
   } catch (err) {
     console.error(err);

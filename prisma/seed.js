@@ -11,13 +11,13 @@ const notificationTemplates = [
     bodyTemplate: 'Jadwal shift kerja Anda untuk periode {periode_mulai} - {periode_selesai} telah tersedia. Silakan periksa.',
     placeholders: '{nama_karyawan}, {periode_mulai}, {periode_selesai}',
   },
-    {
-      eventTrigger: 'SHIFT_UPDATED',
-      description: 'Info saat ada perubahan pada jadwal shift karyawan',
-      titleTemplate: '🔄 Perubahan Jadwal Shift',
-      bodyTemplate: 'Perhatian, shift Anda pada tanggal {tanggal_shift} diubah menjadi {nama_shift} ({jam_masuk} - {jam_pulang}).',
-      placeholders: '{nama_karyawan}, {tanggal_shift}, {nama_shift}, {jam_masuk}, {jam_pulang}',
-    },
+  {
+    eventTrigger: 'SHIFT_UPDATED',
+    description: 'Info saat ada perubahan pada jadwal shift karyawan',
+    titleTemplate: '🔄 Perubahan Jadwal Shift',
+    bodyTemplate: 'Perhatian, shift Anda pada tanggal {tanggal_shift} diubah menjadi {nama_shift} ({jam_masuk} - {jam_pulang}).',
+    placeholders: '{nama_karyawan}, {tanggal_shift}, {nama_shift}, {jam_masuk}, {jam_pulang}',
+  },
   {
     eventTrigger: 'SHIFT_REMINDER_H1',
     description: 'Pengingat H-1 sebelum jadwal shift karyawan',
@@ -54,6 +54,22 @@ const notificationTemplates = [
     titleTemplate: '💬 Komentar Baru pada Agenda',
     bodyTemplate: '{nama_komentator} memberikan komentar pada agenda "{judul_agenda}". Silakan periksa detailnya.',
     placeholders: '{nama_karyawan}, {judul_agenda}, {nama_komentator}',
+  },
+
+  // --- Kunjungan Klien ---
+  {
+    eventTrigger: 'NEW_CLIENT_VISIT_ASSIGNED',
+    description: 'Notifikasi saat karyawan mendapatkan jadwal kunjungan klien baru',
+    titleTemplate: '🗓️ Kunjungan Klien Baru',
+    bodyTemplate: 'Anda dijadwalkan untuk kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} {rentang_waktu_display}. Mohon persiapkan kebutuhan kunjungan.',
+    placeholders: '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan}, {tanggal_kunjungan_display}, {rentang_waktu_display}',
+  },
+  {
+    eventTrigger: 'CLIENT_VISIT_UPDATED',
+    description: 'Notifikasi saat detail kunjungan klien diperbarui oleh admin',
+    titleTemplate: 'ℹ️ Pembaruan Kunjungan Klien',
+    bodyTemplate: 'Detail kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} diperbarui. Status terbaru: {status_kunjungan_display}.',
+    placeholders: '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan_display}, {status_kunjungan_display}',
   },
 
   // --- Istirahat (BARU DITAMBAHKAN) ---

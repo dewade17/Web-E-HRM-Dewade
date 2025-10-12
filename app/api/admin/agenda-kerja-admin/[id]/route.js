@@ -58,6 +58,28 @@ function formatDateTime(value) {
   }
 }
 
+function formatDateTimeDisplay(value) {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('id-ID', {
+      dateStyle: 'long',
+      timeStyle: 'short',
+    }).format(value instanceof Date ? value : new Date(value));
+  } catch (err) {
+    console.warn('Gagal memformat tanggal agenda (admin detail) untuk tampilan:', err);
+    return '';
+  }
+}
+
+function formatStatusDisplay(status) {
+  if (!status) return '';
+  return String(status)
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 export async function GET(request, { params }) {
   const auth = await ensureAuth(request);
   if (auth instanceof NextResponse) return auth;
@@ -160,17 +182,36 @@ export async function PUT(request, { params }) {
       },
     });
 
+    const agendaTitle = updated.agenda?.nama_agenda || 'Agenda Kerja';
+    const friendlyDeadline = formatDateTimeDisplay(updated.end_date);
+    const statusDisplay = formatStatusDisplay(updated.status);
     const notificationPayload = {
       nama_karyawan: updated.user?.nama_pengguna || 'Karyawan',
-      judul_agenda: updated.agenda?.nama_agenda || 'Agenda Kerja',
+      judul_agenda: agendaTitle,
       nama_komentator: 'Panel Admin',
       tanggal_deadline: formatDateTime(updated.end_date),
+      tanggal_deadline_display: friendlyDeadline,
+      status: updated.status,
+      status_display: statusDisplay,
+      title: `Agenda Diperbarui: ${agendaTitle}`,
+      body: [`Detail agenda "${agendaTitle}" telah diperbarui oleh Panel Admin.`, statusDisplay ? `Status terbaru: ${statusDisplay}.` : '', friendlyDeadline ? `Deadline: ${friendlyDeadline}.` : ''].filter(Boolean).join(' ').trim(),
+      related_table: 'agenda_kerja',
+      related_id: updated.id_agenda_kerja,
+      deeplink: `/agenda-kerja/${updated.id_agenda_kerja}`,
+    };
+    const notificationOptions = {
+      dedupeKey: `AGENDA_COMMENTED:${updated.id_agenda_kerja}`,
+      collapseKey: `AGENDA_${updated.id_agenda_kerja}`,
+      deeplink: `/agenda-kerja/${updated.id_agenda_kerja}`,
     };
 
     console.info('[NOTIF] (Admin) Mengirim notifikasi AGENDA_COMMENTED untuk user %s dengan payload %o', updated.id_user, notificationPayload);
-    await sendNotification('AGENDA_COMMENTED', updated.id_user, notificationPayload);
-    console.info('[NOTIF] (Admin) Notifikasi AGENDA_COMMENTED selesai diproses untuk user %s', updated.id_user);
-
+    try {
+      await sendNotification('AGENDA_COMMENTED', updated.id_user, notificationPayload, notificationOptions);
+      console.info('[NOTIF] (Admin) Notifikasi AGENDA_COMMENTED selesai diproses untuk user %s', updated.id_user);
+    } catch (notifErr) {
+      console.error('[NOTIF] (Admin) Gagal mengirim notifikasi AGENDA_COMMENTED untuk user %s: %o', updated.id_user, notifErr);
+    }
     return NextResponse.json({ ok: true, data: updated });
   } catch (err) {
     console.error(err);

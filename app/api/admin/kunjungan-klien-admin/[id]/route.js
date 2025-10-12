@@ -6,6 +6,7 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, parseDateTimeToUTC } from '@/helpers/date-helper';
+import { sendNotification } from '@/app/utils/services/notificationService';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
@@ -67,6 +68,13 @@ const kunjunganInclude = {
       kategori_kunjungan: true,
     },
   },
+  user: {
+    select: {
+      id_user: true,
+      nama_pengguna: true,
+      email: true,
+    },
+  },
   reports: {
     where: { deleted_at: null },
     select: {
@@ -84,6 +92,64 @@ const kunjunganInclude = {
     },
   },
 };
+
+function formatDateDisplay(value) {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('id-ID', { dateStyle: 'long' }).format(value instanceof Date ? value : new Date(value));
+  } catch (err) {
+    console.warn('Gagal memformat tanggal kunjungan (admin detail):', err);
+    return '';
+  }
+}
+
+function formatTimeDisplay(value) {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('id-ID', {
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(value instanceof Date ? value : new Date(value));
+  } catch (err) {
+    console.warn('Gagal memformat waktu kunjungan (admin detail):', err);
+    return '';
+  }
+}
+
+function formatTimeRangeDisplay(start, end) {
+  const startText = formatTimeDisplay(start);
+  const endText = formatTimeDisplay(end);
+  if (startText && endText) return `${startText} - ${endText}`;
+  return startText || endText || '';
+}
+
+function formatStatusDisplay(status) {
+  if (!status) return '';
+  return String(status)
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function extractVisitPresentation(visit) {
+  const tanggal = visit?.tanggal instanceof Date ? visit.tanggal : visit?.tanggal ? new Date(visit.tanggal) : null;
+  const jamMulai = visit?.jam_mulai instanceof Date ? visit.jam_mulai : visit?.jam_mulai ? new Date(visit.jam_mulai) : null;
+  const jamSelesai = visit?.jam_selesai instanceof Date ? visit.jam_selesai : visit?.jam_selesai ? new Date(visit.jam_selesai) : null;
+  const tanggalDisplay = formatDateDisplay(tanggal);
+  const jamMulaiDisplay = formatTimeDisplay(jamMulai);
+  const jamSelesaiDisplay = formatTimeDisplay(jamSelesai);
+  const timeRangeDisplay = formatTimeRangeDisplay(jamMulai, jamSelesai);
+  return {
+    tanggal,
+    jamMulai,
+    jamSelesai,
+    tanggalDisplay,
+    jamMulaiDisplay,
+    jamSelesaiDisplay,
+    timeRangeDisplay,
+  };
+}
 
 const coordinateFields = ['start_latitude', 'start_longitude', 'end_latitude', 'end_longitude'];
 
@@ -380,6 +446,48 @@ export async function PUT(req, { params }) {
       data: updates,
       include: kunjunganInclude,
     });
+    const visitPresentation = extractVisitPresentation(updated);
+    const kategoriLabel = updated.kategori?.kategori_kunjungan || '';
+    const statusDisplay = formatStatusDisplay(updated.status_kunjungan);
+    const scheduleParts = [];
+    if (visitPresentation.tanggalDisplay) scheduleParts.push(visitPresentation.tanggalDisplay);
+    if (visitPresentation.timeRangeDisplay) scheduleParts.push(`pukul ${visitPresentation.timeRangeDisplay}`);
+    const scheduleText = scheduleParts.join(' ');
+    const notificationPayload = {
+      nama_karyawan: updated.user?.nama_pengguna || 'Anda',
+      kategori_kunjungan: kategoriLabel,
+      tanggal_kunjungan: visitPresentation.tanggal ? visitPresentation.tanggal.toISOString() : null,
+      tanggal_kunjungan_display: visitPresentation.tanggalDisplay,
+      jam_mulai: visitPresentation.jamMulai ? visitPresentation.jamMulai.toISOString() : null,
+      jam_mulai_display: visitPresentation.jamMulaiDisplay,
+      jam_selesai: visitPresentation.jamSelesai ? visitPresentation.jamSelesai.toISOString() : null,
+      jam_selesai_display: visitPresentation.jamSelesaiDisplay,
+      rentang_waktu_display: visitPresentation.timeRangeDisplay,
+      status_kunjungan: updated.status_kunjungan,
+      status_kunjungan_display: statusDisplay,
+      title: 'Kunjungan Klien Diperbarui',
+      body: [`Detail kunjungan${kategoriLabel ? ` ${kategoriLabel}` : ' klien'}`, scheduleText ? `pada ${scheduleText}` : '', 'telah diperbarui.', statusDisplay ? `Status sekarang: ${statusDisplay}.` : '']
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+      related_table: 'kunjungan',
+      related_id: updated.id_kunjungan,
+      deeplink: `/kunjungan-klien/${updated.id_kunjungan}`,
+    };
+    const notificationOptions = {
+      dedupeKey: `CLIENT_VISIT_UPDATED:${updated.id_kunjungan}`,
+      collapseKey: `CLIENT_VISIT_${updated.id_kunjungan}`,
+      deeplink: `/kunjungan-klien/${updated.id_kunjungan}`,
+    };
+
+    try {
+      console.info('[NOTIF] (Admin) Mengirim notifikasi CLIENT_VISIT_UPDATED untuk user %s dengan payload %o', updated.id_user, notificationPayload);
+      await sendNotification('CLIENT_VISIT_UPDATED', updated.id_user, notificationPayload, notificationOptions);
+      console.info('[NOTIF] (Admin) Notifikasi CLIENT_VISIT_UPDATED selesai diproses untuk user %s', updated.id_user);
+    } catch (notifErr) {
+      console.error('[NOTIF] (Admin) Gagal mengirim notifikasi CLIENT_VISIT_UPDATED untuk user %s: %o', updated.id_user, notifErr);
+    }
 
     return NextResponse.json({ message: 'Kunjungan diperbarui.', data: updated });
   } catch (err) {
