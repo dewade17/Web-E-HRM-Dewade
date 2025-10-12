@@ -42,6 +42,13 @@ const notificationTemplates = [
     placeholders: '{nama_karyawan}, {judul_agenda}',
   },
   {
+    eventTrigger: 'AGENDA_REMINDER_END',
+    description: 'Pengingat saat mendekati waktu selesai agenda kerja',
+    titleTemplate: '⏳ Agenda Kerja Hampir Selesai',
+    bodyTemplate: 'Agenda "{judul_agenda}" dijadwalkan selesai pada {tanggal_selesai_display}. Pastikan progres Anda sudah diperbarui.',
+    placeholders: '{nama_karyawan}, {judul_agenda}, {tanggal_selesai}, {tanggal_selesai_display}',
+  },
+  {
     eventTrigger: 'AGENDA_OVERDUE',
     description: 'Notifikasi saat agenda kerja melewati batas waktu',
     titleTemplate: '⏰ Agenda Melewati Batas Waktu',
@@ -71,7 +78,13 @@ const notificationTemplates = [
     bodyTemplate: 'Detail kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} diperbarui. Status terbaru: {status_kunjungan_display}.',
     placeholders: '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan_display}, {status_kunjungan_display}',
   },
-
+  {
+    eventTrigger: 'CLIENT_VISIT_REMINDER_END',
+    description: 'Pengingat saat kunjungan klien mendekati waktu selesai',
+    titleTemplate: '⏳ Kunjungan Klien Hampir Selesai',
+    bodyTemplate: 'Kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} akan berakhir pada {waktu_selesai_display}. Mohon lengkapi laporan kunjungan.',
+    placeholders: '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan_display}, {waktu_selesai_display}',
+  },
   // --- Istirahat (BARU DITAMBAHKAN) ---
   {
     eventTrigger: 'SUCCESS_START_BREAK',

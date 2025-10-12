@@ -220,7 +220,7 @@ export async function POST(req) {
       include: kunjunganInclude,
     });
 
-    return NextResponse.json({ message: 'Kunjungan klien dibuat.', data: created }, { status: 201 });
+    return NextResponse.json({ message: 'Anda berhasil menambahkan kunjungan klien.', data: created }, { status: 201 });
   } catch (err) {
     if (err?.code === 'P2003') {
       return NextResponse.json({ message: 'Kategori kunjungan tidak valid.' }, { status: 400 });

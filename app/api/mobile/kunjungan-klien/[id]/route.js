@@ -357,7 +357,7 @@ export async function PUT(req, { params }) {
       await deleteLampiranFromSupabase(oldLampiranToDelete).catch(() => {});
     }
 
-    return NextResponse.json({ message: 'Kunjungan klien diperbarui.', data: updated });
+    return NextResponse.json({ message: 'Kunjungan klien berhasil diperbarui.', data: updated });
   } catch (err) {
     if (lampiranUploadedFromFile && lampiranUrlValue) {
       await deleteLampiranFromSupabase(lampiranUrlValue).catch(() => {});

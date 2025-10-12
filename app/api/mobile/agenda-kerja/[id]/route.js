@@ -150,7 +150,7 @@ export async function PUT(request, { params }) {
     await sendNotification('AGENDA_COMMENTED', updated.id_user, notificationPayload);
     console.info('[NOTIF] (Mobile) Notifikasi AGENDA_COMMENTED selesai diproses untuk user %s', updated.id_user);
 
-    return NextResponse.json({ ok: true, data: updated });
+    return NextResponse.json({ ok: true, message: 'Agenda kerja berhasil diperbarui.', data: updated });
   } catch (err) {
     console.error(err);
     return NextResponse.json({ ok: false, message: 'Gagal mengubah agenda kerja' }, { status: 500 });

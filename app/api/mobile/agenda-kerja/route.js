@@ -217,7 +217,7 @@ export async function POST(request) {
     await sendNotification('NEW_AGENDA_ASSIGNED', created.id_user, notificationPayload);
     console.info('[NOTIF] (Mobile) Notifikasi NEW_AGENDA_ASSIGNED selesai diproses untuk user %s', created.id_user);
 
-    return NextResponse.json({ ok: true, data: created }, { status: 201 });
+    return NextResponse.json({ ok: true, message: 'Anda berhasil menambahkan agenda kerja.', data: created }, { status: 201 });
   } catch (err) {
     // Blok catch ini sekarang menjadi fallback jika ada error lain
     console.error(err);
@@ -228,7 +228,7 @@ export async function POST(request) {
 function normalizeKebutuhanInput(input) {
   if (input === undefined) return { value: undefined };
   if (input === null) return { value: null };
-  
+
   const trimmed = String(input).trim();
   if (!trimmed) return { value: null };
   return { value: trimmed };
