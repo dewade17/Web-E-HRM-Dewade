@@ -43,6 +43,9 @@ export async function sendNotification(eventTrigger, userId, dynamicData = {}, o
 
   // 2) Ambil template
   const tpl = await prisma.notificationTemplate.findUnique({ where: { eventTrigger } });
+  const overrideTitle = dynamicData?.overrideTitle;
+  const overrideBody = dynamicData?.overrideBody;
+
   let title = 'Notifikasi';
   let body = 'Anda memiliki notifikasi baru.';
   if (tpl && tpl.isActive) {
@@ -53,6 +56,8 @@ export async function sendNotification(eventTrigger, userId, dynamicData = {}, o
     if (dynamicData?.title) title = dynamicData.title;
     if (dynamicData?.body) body = dynamicData.body;
   }
+  if (overrideTitle) title = overrideTitle;
+  if (overrideBody) body = overrideBody;
 
   // 3) Persist ke tabel Notification (sebagai inbox in-app)
   const notifRecord = await prisma.notification.create({

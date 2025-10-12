@@ -6,6 +6,7 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, parseDateTimeToUTC } from '@/helpers/date-helper';
+import { sendNotification } from '@/app/utils/services/notificationService';
 
 const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET ?? 'e-hrm';
 
@@ -65,11 +66,44 @@ function isNullLike(value) {
   return false;
 }
 
+function formatDateDisplay(value) {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('id-ID', { dateStyle: 'long' }).format(value instanceof Date ? value : new Date(value));
+  } catch (err) {
+    console.warn('Gagal memformat tanggal kunjungan (mobile):', err);
+    return '';
+  }
+}
+
+function formatTimeDisplay(value) {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit' }).format(value instanceof Date ? value : new Date(value));
+  } catch (err) {
+    console.warn('Gagal memformat waktu kunjungan (mobile):', err);
+    return '';
+  }
+}
+
+function formatTimeRangeDisplay(start, end) {
+  const startText = formatTimeDisplay(start);
+  const endText = formatTimeDisplay(end);
+  if (startText && endText) return `${startText} - ${endText}`;
+  return startText || endText || '';
+}
+
 const kunjunganInclude = {
   kategori: {
     select: {
       id_kategori_kunjungan: true,
       kategori_kunjungan: true,
+    },
+  },
+  user: {
+    select: {
+      id_user: true,
+      nama_pengguna: true,
     },
   },
   reports: {
@@ -219,6 +253,50 @@ export async function POST(req) {
       data,
       include: kunjunganInclude,
     });
+
+    const visitDate = created.tanggal instanceof Date ? created.tanggal : created?.tanggal ? new Date(created.tanggal) : null;
+    const startTime = created.jam_mulai instanceof Date ? created.jam_mulai : created?.jam_mulai ? new Date(created.jam_mulai) : null;
+    const endTime = created.jam_selesai instanceof Date ? created.jam_selesai : created?.jam_selesai ? new Date(created.jam_selesai) : null;
+    const tanggalDisplay = formatDateDisplay(visitDate);
+    const timeRangeDisplay = formatTimeRangeDisplay(startTime, endTime);
+    const kategoriLabel = created.kategori?.kategori_kunjungan || '';
+    const scheduleParts = [];
+    if (tanggalDisplay) scheduleParts.push(tanggalDisplay);
+    if (timeRangeDisplay) scheduleParts.push(`pukul ${timeRangeDisplay}`);
+    const scheduleText = scheduleParts.join(' ');
+
+    const mobileTitle = 'Kunjungan Klien Ditambahkan';
+    const mobileBody = [`Anda baru saja menambahkan kunjungan${kategoriLabel ? ` ${kategoriLabel}` : ' klien'}.`, scheduleText ? `Jadwal kunjungan pada ${scheduleText}.` : '', 'Pastikan untuk memperbarui laporan setelah kunjungan.']
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+
+    const notificationPayload = {
+      nama_karyawan: created.user?.nama_pengguna || 'Anda',
+      kategori_kunjungan: kategoriLabel,
+      tanggal_kunjungan: visitDate ? visitDate.toISOString() : null,
+      tanggal_kunjungan_display: tanggalDisplay,
+      jam_mulai: startTime ? startTime.toISOString() : null,
+      jam_mulai_display: formatTimeDisplay(startTime),
+      jam_selesai: endTime ? endTime.toISOString() : null,
+      jam_selesai_display: formatTimeDisplay(endTime),
+      rentang_waktu_display: timeRangeDisplay,
+      title: mobileTitle,
+      body: mobileBody,
+      overrideTitle: mobileTitle,
+      overrideBody: mobileBody,
+      related_table: 'kunjungan',
+      related_id: created.id_kunjungan,
+      deeplink: `/kunjungan-klien/${created.id_kunjungan}`,
+    };
+
+    try {
+      console.info('[NOTIF] (Mobile) Mengirim notifikasi NEW_CLIENT_VISIT_ASSIGNED untuk user %s dengan payload %o', created.id_user, notificationPayload);
+      await sendNotification('NEW_CLIENT_VISIT_ASSIGNED', created.id_user, notificationPayload);
+      console.info('[NOTIF] (Mobile) Notifikasi NEW_CLIENT_VISIT_ASSIGNED selesai diproses untuk user %s', created.id_user);
+    } catch (notifErr) {
+      console.error('[NOTIF] (Mobile) Gagal mengirim notifikasi NEW_CLIENT_VISIT_ASSIGNED untuk user %s: %o', created.id_user, notifErr);
+    }
 
     return NextResponse.json({ message: 'Anda berhasil menambahkan kunjungan klien.', data: created }, { status: 201 });
   } catch (err) {

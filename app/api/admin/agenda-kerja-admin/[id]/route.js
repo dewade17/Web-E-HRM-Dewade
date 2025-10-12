@@ -185,6 +185,11 @@ export async function PUT(request, { params }) {
     const agendaTitle = updated.agenda?.nama_agenda || 'Agenda Kerja';
     const friendlyDeadline = formatDateTimeDisplay(updated.end_date);
     const statusDisplay = formatStatusDisplay(updated.status);
+    const adminTitle = `Admin Memperbarui Agenda: ${agendaTitle}`;
+    const adminBody = [`Admin memperbarui agenda kerja "${agendaTitle}" untuk Anda.`, statusDisplay ? `Status terbaru: ${statusDisplay}.` : '', friendlyDeadline ? `Selesaikan sebelum ${friendlyDeadline}.` : '']
+      .filter(Boolean)
+      .join(' ')
+      .trim();
     const notificationPayload = {
       nama_karyawan: updated.user?.nama_pengguna || 'Karyawan',
       judul_agenda: agendaTitle,
@@ -193,6 +198,11 @@ export async function PUT(request, { params }) {
       tanggal_deadline_display: friendlyDeadline,
       status: updated.status,
       status_display: statusDisplay,
+      pemberi_tugas: 'Panel Admin',
+      title: adminTitle,
+      body: adminBody,
+      overrideTitle: adminTitle,
+      overrideBody: adminBody,
       title: `Agenda Diperbarui: ${agendaTitle}`,
       body: [`Detail agenda "${agendaTitle}" telah diperbarui oleh Panel Admin.`, statusDisplay ? `Status terbaru: ${statusDisplay}.` : '', friendlyDeadline ? `Deadline: ${friendlyDeadline}.` : ''].filter(Boolean).join(' ').trim(),
       related_table: 'agenda_kerja',

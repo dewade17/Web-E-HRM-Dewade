@@ -453,6 +453,16 @@ export async function PUT(req, { params }) {
     if (visitPresentation.tanggalDisplay) scheduleParts.push(visitPresentation.tanggalDisplay);
     if (visitPresentation.timeRangeDisplay) scheduleParts.push(`pukul ${visitPresentation.timeRangeDisplay}`);
     const scheduleText = scheduleParts.join(' ');
+    const adminTitle = `Admin Memperbarui Kunjungan${kategoriLabel ? ` ${kategoriLabel}` : ''}`.trim();
+    const adminBody = [
+      `Admin memperbarui detail kunjungan${kategoriLabel ? ` ${kategoriLabel}` : ' klien'} Anda.`,
+      scheduleText ? `Jadwal kunjungan pada ${scheduleText}.` : '',
+      statusDisplay ? `Status kunjungan sekarang: ${statusDisplay}.` : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     const notificationPayload = {
       nama_karyawan: updated.user?.nama_pengguna || 'Anda',
       kategori_kunjungan: kategoriLabel,
@@ -465,12 +475,11 @@ export async function PUT(req, { params }) {
       rentang_waktu_display: visitPresentation.timeRangeDisplay,
       status_kunjungan: updated.status_kunjungan,
       status_kunjungan_display: statusDisplay,
-      title: 'Kunjungan Klien Diperbarui',
-      body: [`Detail kunjungan${kategoriLabel ? ` ${kategoriLabel}` : ' klien'}`, scheduleText ? `pada ${scheduleText}` : '', 'telah diperbarui.', statusDisplay ? `Status sekarang: ${statusDisplay}.` : '']
-        .filter(Boolean)
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim(),
+      pemberi_tugas: 'Panel Admin',
+      title: adminTitle,
+      body: adminBody,
+      overrideTitle: adminTitle,
+      overrideBody: adminBody,
       related_table: 'kunjungan',
       related_id: updated.id_kunjungan,
       deeplink: `/kunjungan-klien/${updated.id_kunjungan}`,

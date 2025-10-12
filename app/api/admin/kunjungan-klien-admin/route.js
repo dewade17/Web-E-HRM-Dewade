@@ -300,6 +300,12 @@ export async function POST(req) {
     if (visitPresentation.tanggalDisplay) scheduleParts.push(visitPresentation.tanggalDisplay);
     if (visitPresentation.timeRangeDisplay) scheduleParts.push(`pukul ${visitPresentation.timeRangeDisplay}`);
     const scheduleText = scheduleParts.join(' ');
+    const adminTitle = 'Admin Menambahkan Jadwal Kunjungan Klien';
+    const adminBody = [`Admin menambahkan kunjungan${kategoriLabel ? ` ${kategoriLabel}` : ' klien'} untuk Anda`, scheduleText ? `pada ${scheduleText}.` : '.', 'Silakan siapkan kebutuhan kunjungan.']
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\.\s+Silakan/, '. Silakan')
+      .trim();
     const notificationPayload = {
       nama_karyawan: created.user?.nama_pengguna || 'Anda',
       kategori_kunjungan: kategoriLabel,
@@ -312,8 +318,10 @@ export async function POST(req) {
       rentang_waktu_display: visitPresentation.timeRangeDisplay,
       status_kunjungan: created.status_kunjungan,
       status_kunjungan_display: formatStatusDisplay(created.status_kunjungan),
-      title: 'Kunjungan Klien Baru Dijadwalkan',
-      body: [`Anda dijadwalkan untuk kunjungan${kategoriLabel ? ` ${kategoriLabel}` : ' klien'}`, scheduleText ? `pada ${scheduleText}` : '', 'Mohon persiapkan kebutuhan kunjungan.'].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim(),
+      title: adminTitle,
+      body: adminBody,
+      overrideTitle: adminTitle,
+      overrideBody: adminBody,
       related_table: 'kunjungan',
       related_id: created.id_kunjungan,
       deeplink: `/kunjungan-klien/${created.id_kunjungan}`,

@@ -40,6 +40,28 @@ function formatDateTime(value) {
   }
 }
 
+function formatDateTimeDisplay(value) {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('id-ID', {
+      dateStyle: 'long',
+      timeStyle: 'short',
+    }).format(value instanceof Date ? value : new Date(value));
+  } catch (err) {
+    console.warn('Gagal memformat tanggal agenda (mobile detail) untuk tampilan:', err);
+    return '';
+  }
+}
+
+function formatStatusDisplay(status) {
+  if (!status) return '';
+  return String(status)
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 // GET /api/agenda-kerja/[id]
 export async function GET(_req, { params }) {
   try {
@@ -139,11 +161,31 @@ export async function PUT(request, { params }) {
       },
     });
 
+    const agendaTitle = updated.agenda?.nama_agenda || 'Agenda Kerja';
+    const friendlyDeadline = formatDateTimeDisplay(updated.end_date);
+    const statusDisplay = formatStatusDisplay(updated.status);
+    const mobileTitle = `Agenda Kerja Diperbarui: ${agendaTitle}`;
+    const mobileBody = [`Anda baru saja memperbarui agenda kerja "${agendaTitle}".`, statusDisplay ? `Status agenda sekarang: ${statusDisplay}.` : '', friendlyDeadline ? `Tenggat agenda pada ${friendlyDeadline}.` : '']
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+
     const notificationPayload = {
       nama_karyawan: updated.user?.nama_pengguna || 'Karyawan',
-      judul_agenda: updated.agenda?.nama_agenda || 'Agenda Kerja',
+      judul_agenda: agendaTitle,
       nama_komentator: 'Anda',
       tanggal_deadline: formatDateTime(updated.end_date),
+      tanggal_deadline_display: friendlyDeadline,
+      status: updated.status,
+      status_display: statusDisplay,
+      pemberi_tugas: 'Aplikasi Mobile',
+      title: mobileTitle,
+      body: mobileBody,
+      overrideTitle: mobileTitle,
+      overrideBody: mobileBody,
+      related_table: 'agenda_kerja',
+      related_id: updated.id_agenda_kerja,
+      deeplink: `/agenda-kerja/${updated.id_agenda_kerja}`,
     };
 
     console.info('[NOTIF] (Mobile) Mengirim notifikasi AGENDA_COMMENTED untuk user %s dengan payload %o', updated.id_user, notificationPayload);

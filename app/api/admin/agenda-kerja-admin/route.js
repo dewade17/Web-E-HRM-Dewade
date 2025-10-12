@@ -250,14 +250,19 @@ export async function POST(request) {
 
     const agendaTitle = created.agenda?.nama_agenda || 'Agenda Baru';
     const friendlyDeadline = formatDateTimeDisplay(created.end_date);
+    const adminTitle = `Admin Menambahkan Agenda: ${agendaTitle}`;
+    const adminBody = [`Admin menambahkan agenda kerja "${agendaTitle}" untuk Anda.`, friendlyDeadline ? `Selesaikan sebelum ${friendlyDeadline}.` : ''].filter(Boolean).join(' ').trim();
+
     const notificationPayload = {
       nama_karyawan: created.user?.nama_pengguna || 'Karyawan',
       judul_agenda: agendaTitle,
       tanggal_deadline: formatDateTime(created.end_date),
       tanggal_deadline_display: friendlyDeadline,
       pemberi_tugas: 'Panel Admin',
-      title: `Agenda Kerja Baru: ${agendaTitle}`,
-      body: [`Anda mendapatkan agenda kerja baru "${agendaTitle}".`, friendlyDeadline ? `Selesaikan sebelum ${friendlyDeadline}.` : ''].filter(Boolean).join(' ').trim(),
+      title: adminTitle,
+      body: adminBody,
+      overrideTitle: adminTitle,
+      overrideBody: adminBody,
       related_table: 'agenda_kerja',
       related_id: created.id_agenda_kerja,
       deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
