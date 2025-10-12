@@ -73,9 +73,9 @@ const notificationTemplates = [
   },
   {
     eventTrigger: 'CLIENT_VISIT_UPDATED',
-    description: 'Notifikasi saat detail kunjungan klien diperbarui oleh admin',
+    description: 'Notifikasi saat detail kunjungan klien diperbarui',
     titleTemplate: 'ℹ️ Pembaruan Kunjungan Klien',
-    bodyTemplate: 'Detail kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} diperbarui. Status terbaru: {status_kunjungan_display}.',
+    bodyTemplate: 'Detail kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} telah diperbarui. Status terbaru: {status_kunjungan_display}.',
     placeholders: '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan_display}, {status_kunjungan_display}',
   },
   {
