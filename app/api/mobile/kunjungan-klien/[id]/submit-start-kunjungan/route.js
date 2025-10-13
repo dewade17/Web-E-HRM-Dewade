@@ -150,6 +150,14 @@ export async function PUT(req, { params }) {
 
     const existing = await db.kunjungan.findFirst({
       where: { id_kunjungan: id, id_user: actorId, deleted_at: null },
+
+      include: {
+        user: {
+          select: {
+            nama_pengguna: true,
+          },
+        },
+      },
     });
 
     if (!existing) {
@@ -210,16 +218,18 @@ export async function PUT(req, { params }) {
 
     // Kirim notifikasi di latar belakang tanpa menunggu (fire and forget)
     const deskripsi = (existing.deskripsi || '').trim() || 'Tidak ada deskripsi.';
+    const namaPengguna = (existing.user?.nama_pengguna || '').trim() || 'Tidak diketahui';
     const lampiranUrl = updated.lampiran_kunjungan_url ?? data.lampiran_kunjungan_url ?? null;
+    const messageLines = ['Check-in kunjungan dimulai.', `Nama Pengguna: ${namaPengguna}`, `Deskripsi: ${deskripsi}`, `Lampiran URL: ${lampiranUrl || '-'}`];
+    const messageText = messageLines.join('\n');
 
     if (lampiranUrl) {
-      const caption = `${deskripsi}`;
       // Hapus 'await' dan tambahkan .catch() untuk menangani error di latar belakang
-      sendStartKunjunganImage(lampiranUrl, caption).catch((err) => console.error('Gagal kirim notif gambar di latar belakang:', err));
+      sendStartKunjunganImage(lampiranUrl, messageText).catch((err) => console.error('Gagal kirim notif gambar di latar belakang:', err));
     } else {
       const textMessage = `Check-in kunjungan dimulai.\n\nDeskripsi: ${deskripsi}\n(Tanpa lampiran)`;
       // Hapus 'await' dan tambahkan .catch()
-      sendStartKunjunganMessage(textMessage).catch((err) => console.error('Gagal kirim notif teks di latar belakang:', err));
+      sendStartKunjunganMessage(messageText).catch((err) => console.error('Gagal kirim notif teks di latar belakang:', err));
     }
 
     // Langsung kembalikan respons ke pengguna agar tidak menunggu lama
