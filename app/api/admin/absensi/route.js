@@ -67,6 +67,22 @@ export async function GET(req) {
                   departement: { select: { id_departement: true, nama_departement: true } },
                 },
               },
+              istirahat: {
+                where: { deleted_at: null },
+                orderBy: [{ start_istirahat: 'asc' }],
+                select: {
+                  id_istirahat: true,
+                  tanggal_istirahat: true,
+                  start_istirahat: true,
+                  end_istirahat: true,
+                  start_istirahat_latitude: true,
+                  start_istirahat_longitude: true,
+                  end_istirahat_latitude: true,
+                  end_istirahat_longitude: true,
+                  created_at: true,
+                  updated_at: true,
+                },
+              },
               lokasiIn: {
                 select: {
                   id_location: true,
