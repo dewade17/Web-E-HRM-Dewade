@@ -312,7 +312,10 @@ export async function PUT(req, { params }) {
   }
 
   try {
-    const existing = await db.kunjungan.findUnique({ where: { id_kunjungan: id } });
+    const existing = await db.kunjungan.findUnique({
+      where: { id_kunjungan: id },
+      include: kunjunganInclude,
+    });
     if (!existing || existing.deleted_at) {
       return NextResponse.json({ message: 'Kunjungan tidak ditemukan.' }, { status: 404 });
     }
@@ -530,7 +533,10 @@ export async function DELETE(req, { params }) {
   }
 
   try {
-    const existing = await db.kunjungan.findUnique({ where: { id_kunjungan: id } });
+    const existing = await db.kunjungan.findUnique({
+      where: { id_kunjungan: id },
+      include: kunjunganInclude,
+    });
     if (!existing || existing.deleted_at) {
       return NextResponse.json({ message: 'Kunjungan tidak ditemukan.' }, { status: 404 });
     }
@@ -542,11 +548,62 @@ export async function DELETE(req, { params }) {
     const { searchParams } = new URL(req.url);
     const hard = (searchParams.get('hard') || '').toLowerCase();
 
-    if (hard === '1' || hard === 'true') {
+    const visitPresentation = extractVisitPresentation(existing);
+    const kategoriLabel = existing.kategori?.kategori_kunjungan || '';
+    const scheduleParts = [];
+    if (visitPresentation.tanggalDisplay) scheduleParts.push(visitPresentation.tanggalDisplay);
+    if (visitPresentation.timeRangeDisplay) scheduleParts.push(`pukul ${visitPresentation.timeRangeDisplay}`);
+    const scheduleText = scheduleParts.join(' ');
+    const hardDelete = hard === '1' || hard === 'true';
+    const eventTrigger = hardDelete ? 'CLIENT_VISIT_DELETED' : 'CLIENT_VISIT_CANCELLED';
+    const adminTitle = `Admin ${hardDelete ? 'Menghapus' : 'Membatalkan'} Kunjungan${kategoriLabel ? ` ${kategoriLabel}` : ''}`.trim();
+    const adminBody = [
+      `Admin ${hardDelete ? 'menghapus' : 'membatalkan'} kunjungan${kategoriLabel ? ` ${kategoriLabel}` : ' klien'} Anda.`,
+      scheduleText ? `Jadwal semula pada ${scheduleText}.` : '',
+      'Silakan hubungi admin jika membutuhkan informasi lebih lanjut.',
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const notificationPayload = {
+      nama_karyawan: existing.user?.nama_pengguna || 'Anda',
+      kategori_kunjungan: kategoriLabel,
+      tanggal_kunjungan: visitPresentation.tanggal ? visitPresentation.tanggal.toISOString() : null,
+      tanggal_kunjungan_display: visitPresentation.tanggalDisplay,
+      jam_mulai: visitPresentation.jamMulai ? visitPresentation.jamMulai.toISOString() : null,
+      jam_mulai_display: visitPresentation.jamMulaiDisplay,
+      jam_selesai: visitPresentation.jamSelesai ? visitPresentation.jamSelesai.toISOString() : null,
+      jam_selesai_display: visitPresentation.jamSelesaiDisplay,
+      rentang_waktu_display: visitPresentation.timeRangeDisplay,
+      status_kunjungan: existing.status_kunjungan,
+      status_kunjungan_display: formatStatusDisplay(existing.status_kunjungan),
+      pemberi_tugas: 'Panel Admin',
+      title: adminTitle,
+      body: adminBody,
+      overrideTitle: adminTitle,
+      overrideBody: adminBody,
+      related_table: 'kunjungan',
+      related_id: existing.id_kunjungan,
+    };
+    const notificationOptions = {
+      dedupeKey: `${eventTrigger}:${existing.id_kunjungan}`,
+      collapseKey: `CLIENT_VISIT_${existing.id_kunjungan}`,
+      deeplink: '/kunjungan-klien',
+    };
+
+    if (hardDelete) {
       if (existing.lampiran_kunjungan) {
         await deleteLampiranFromSupabase(existing.lampiran_kunjungan);
       }
       await db.kunjungan.delete({ where: { id_kunjungan: id } });
+      try {
+        console.info('[NOTIF] (Admin) Mengirim notifikasi %s untuk user %s dengan payload %o', eventTrigger, existing.id_user, notificationPayload);
+        await sendNotification(eventTrigger, existing.id_user, notificationPayload, notificationOptions);
+        console.info('[NOTIF] (Admin) Notifikasi %s selesai diproses untuk user %s', eventTrigger, existing.id_user);
+      } catch (notifErr) {
+        console.error('[NOTIF] (Admin) Gagal mengirim notifikasi %s untuk user %s: %o', eventTrigger, existing.id_user, notifErr);
+      }
       return NextResponse.json({ message: 'Kunjungan dihapus permanen.' });
     }
 
@@ -554,6 +611,14 @@ export async function DELETE(req, { params }) {
       where: { id_kunjungan: id },
       data: { deleted_at: new Date() },
     });
+
+    try {
+      console.info('[NOTIF] (Admin) Mengirim notifikasi %s untuk user %s dengan payload %o', eventTrigger, existing.id_user, notificationPayload);
+      await sendNotification(eventTrigger, existing.id_user, notificationPayload, notificationOptions);
+      console.info('[NOTIF] (Admin) Notifikasi %s selesai diproses untuk user %s', eventTrigger, existing.id_user);
+    } catch (notifErr) {
+      console.error('[NOTIF] (Admin) Gagal mengirim notifikasi %s untuk user %s: %o', eventTrigger, existing.id_user, notifErr);
+    }
 
     return NextResponse.json({ message: 'Kunjungan diarsipkan.' });
   } catch (err) {
