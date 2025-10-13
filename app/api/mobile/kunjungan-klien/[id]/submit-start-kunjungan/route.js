@@ -222,7 +222,7 @@ export async function PUT(req, { params }) {
     if (lampiranUrl) {
       // Jika ada gambar, buat caption yang ringkas.
       // Format: Baris 1 adalah nama, Baris 2 adalah deskripsi.
-      const caption = `${namaPengguna}\nDeskripsi: ${deskripsi}`;
+      const caption = `${namaPengguna}\n${deskripsi}`;
       sendStartKunjunganImage(lampiranUrl, caption).catch((err) => console.error('Gagal kirim notif gambar di latar belakang:', err));
     } else {
       // Jika tidak ada gambar, kirim pesan teks biasa.
