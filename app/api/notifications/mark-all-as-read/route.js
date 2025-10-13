@@ -33,7 +33,7 @@ async function resolveUserId(request) {
   return { userId: sessionUserId, source: 'session', session: sessionOrResponse };
 }
 
-export async function POST(request) {
+export async function PUT(request) {
   const authResult = await resolveUserId(request);
   if (authResult instanceof NextResponse) return authResult;
 
