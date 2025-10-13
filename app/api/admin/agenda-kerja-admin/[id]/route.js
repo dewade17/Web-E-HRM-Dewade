@@ -113,6 +113,9 @@ export async function PUT(request, { params }) {
   const forbidden = guardOperational(auth.actor);
   if (forbidden) return forbidden;
 
+  const actorId = auth.actor?.id;
+  const actorPromise = actorId ? db.user.findUnique({ where: { id_user: String(actorId) }, select: { nama_pengguna: true } }) : null;
+
   try {
     const current = await db.agendaKerja.findUnique({ where: { id_agenda_kerja: params.id } });
     if (!current || current.deleted_at) {
@@ -182,25 +185,29 @@ export async function PUT(request, { params }) {
       },
     });
 
+    const actorUser = actorPromise ? await actorPromise : null;
+    const actorName = (actorUser?.nama_pengguna || '').trim() || 'Pengguna';
     const agendaTitle = updated.agenda?.nama_agenda || 'Agenda Kerja';
     const friendlyDeadline = formatDateTimeDisplay(updated.end_date);
     const statusDisplay = formatStatusDisplay(updated.status);
-    const adminTitle = `Admin Memperbarui Agenda: ${agendaTitle}`;
-    const adminBody = [`Admin memperbarui agenda kerja "${agendaTitle}" untuk Anda.`, statusDisplay ? `Status terbaru: ${statusDisplay}.` : '', friendlyDeadline ? `Selesaikan sebelum ${friendlyDeadline}.` : '']
+    const adminTitle = `${actorName} Memperbarui Agenda: ${agendaTitle}`;
+    const adminBody = [`${actorName} memperbarui agenda kerja "${agendaTitle}" untuk Anda.`, statusDisplay ? `Status terbaru: ${statusDisplay}.` : '', friendlyDeadline ? `Selesaikan sebelum ${friendlyDeadline}.` : '']
       .filter(Boolean)
       .join(' ')
       .trim();
+    const assigneeTitle = `Agenda Diperbarui: ${agendaTitle}`;
+    const assigneeBody = [`Detail agenda "${agendaTitle}" telah diperbarui oleh ${actorName}.`, statusDisplay ? `Status terbaru: ${statusDisplay}.` : '', friendlyDeadline ? `Deadline: ${friendlyDeadline}.` : ''];
     const notificationPayload = {
       nama_karyawan: updated.user?.nama_pengguna || 'Karyawan',
       judul_agenda: agendaTitle,
-      nama_komentator: 'Panel Admin',
+      nama_komentator: actorName,
       tanggal_deadline: formatDateTime(updated.end_date),
       tanggal_deadline_display: friendlyDeadline,
       status: updated.status,
       status_display: statusDisplay,
-      pemberi_tugas: 'Panel Admin',
-      title: adminTitle,
-      body: adminBody,
+      pemberi_tugas: actorName,
+      title: assigneeTitle,
+      body: assigneeBody,
       overrideTitle: adminTitle,
       overrideBody: adminBody,
       title: `Agenda Diperbarui: ${agendaTitle}`,
