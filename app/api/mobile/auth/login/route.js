@@ -32,7 +32,7 @@ export async function POST(req) {
         role: user.role,
         email: user.email,
       },
-      { expiresIn: '1d' } // override TTL jika perlu
+      { expiresIn: '1y' } // override TTL jika perlu
     );
 
     return NextResponse.json({ message: 'Login berhasil.', accessToken }, { status: 200 });

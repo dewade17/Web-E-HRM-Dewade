@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/prisma';
-import { verifyAuthToken } from '@/lib/jwt';
-import { authenticateRequest } from '@/app/utils/auth/authUtils';
-import { parseDateTimeToUTC } from '@/helpers/date-helper';
+import db from '../../../../../lib/prisma';
+import { verifyAuthToken } from '../../../../../lib/jwt';
+import { authenticateRequest } from '../../../../../app/utils/auth/authUtils';
+import { parseDateTimeToUTC } from '../../../../../helpers/date-helper';
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';

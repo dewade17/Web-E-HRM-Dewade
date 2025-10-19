@@ -47,7 +47,16 @@ function combineDateTime(date, timeValue) {
   if (!date || !timeValue) return null;
   const base = new Date(date);
   const time = new Date(timeValue);
-  return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), time.getUTCHours(), time.getUTCMinutes(), time.getUTCSeconds()));
+  return new Date(
+    Date.UTC(
+      base.getUTCFullYear(),
+      base.getUTCMonth(),
+      base.getUTCDate(),
+      time.getUTCHours(),
+      time.getUTCMinutes(),
+      time.getUTCSeconds()
+    )
+  );
 }
 function findShiftForDate(shifts, date) {
   if (!Array.isArray(shifts)) return null;
@@ -98,7 +107,9 @@ function buildCalendarEvents(leaves, year, monthIndex) {
   }
   for (const day in events) {
     const info = events[day];
-    const dominantType = Object.keys(info.counts).reduce((a, b) => (info.counts[a] > info.counts[b] ? a : b));
+    const dominantType = Object.keys(info.counts).reduce((a, b) =>
+      info.counts[a] > info.counts[b] ? a : b
+    );
     const meta = CALENDAR_TYPE_META[dominantType] || { color: 'bg-slate-400' };
     const tipParts = Object.entries(info.counts).map(([type, count]) => {
       const label = CALENDAR_TYPE_META[type]?.label || type;

@@ -14,8 +14,8 @@ const normRole = (r) =>
   String(r || '')
     .trim()
     .toUpperCase();
-const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR'].includes(normRole(role));
-const canManageAll = (role) => ['OPERASIONAL'].includes(normRole(role));
+const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR', 'SUPERADMIN'].includes(normRole(role));
+const canManageAll = (role) => ['OPERASIONAL', 'SUPERADMIN'].includes(normRole(role));
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -54,9 +54,11 @@ async function ensureAuth(req) {
   };
 }
 
+// === FIXED: izinkan OPERASIONAL **dan** SUPERADMIN
 function guardOperational(actor) {
-  if (actor?.role !== 'OPERASIONAL') {
-    return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL yang dapat mengakses resource ini.' }, { status: 403 });
+  const role = String(actor?.role || '').trim().toUpperCase();
+  if (role !== 'OPERASIONAL' && role !== 'SUPERADMIN') {
+    return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' }, { status: 403 });
   }
   return null;
 }
@@ -256,8 +258,6 @@ async function parseRequestBody(req) {
 export async function GET(req, { params }) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
-  const forbidden = guardOperational(auth.actor);
-  if (forbidden) return forbidden;
 
   const actorId = auth.actor?.id;
   const role = auth.actor?.role;

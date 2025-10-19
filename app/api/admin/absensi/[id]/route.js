@@ -39,9 +39,7 @@ export async function PUT(req, { params }) {
     let shouldTouchReadAt = false;
 
     if ('status' in body) {
-      const normalized = String(body.status || '')
-        .trim()
-        .toLowerCase();
+      const normalized = String(body.status || '').trim().toLowerCase();
       if (!DECISION_STATUSES.has(normalized)) {
         return NextResponse.json({ message: "Status hanya boleh 'disetujui' atau 'ditolak'." }, { status: 400 });
       }

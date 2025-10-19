@@ -2,7 +2,7 @@
 export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
-import db from '@/lib/prisma';
+import db from '../../../../../lib/prisma';
 import { createClient } from '@supabase/supabase-js';
 import jwt from 'jsonwebtoken';
 import { verifyAuthToken } from '@/lib/jwt';

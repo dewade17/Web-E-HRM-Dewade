@@ -1,4 +1,4 @@
-import { parseDateOnlyToUTC } from '@/helpers/date-helper';
+import { parseDateOnlyToUTC } from '../../../helpers/date-helper';
 
 export const JENIS_KELAMIN_VALUES = new Set(['LAKI_LAKI', 'PEREMPUAN']);
 export const STATUS_KERJA_VALUES = new Set(['AKTIF', 'TIDAK_AKTIF', 'CUTI']);

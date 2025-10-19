@@ -1,4 +1,4 @@
-import { parseDateOnlyToUTC } from '@/helpers/date-helper';
+import { parseDateOnlyToUTC } from '../../../../helpers/date-helper';
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 

@@ -15,8 +15,8 @@ const normRole = (r) =>
   String(r || '')
     .trim()
     .toUpperCase();
-const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR'].includes(normRole(role));
-const canManageAll = (role) => ['OPERASIONAL'].includes(normRole(role)); // hanya Operasional yang full manage
+const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR','SUPERADMIN'].includes(normRole(role));
+const canManageAll = (role) => ['OPERASIONAL', 'SUPERADMIN'].includes(normRole(role)); // hanya Operasional yang full manage
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -157,16 +157,17 @@ export async function GET(req) {
       if (Number.isNaN(tanggal.getTime())) {
         return NextResponse.json({ message: "Parameter 'tanggal' tidak valid." }, { status: 400 });
       }
-      const start = new Date(tanggal);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 1);
+      const start = new Date(tanggal); start.setHours(0, 0, 0, 0);
+      const end = new Date(start); end.setDate(end.getDate() + 1);
       filters.push({ tanggal: { gte: start, lt: end } });
     }
 
     if (searchTerm) {
       filters.push({
-        OR: [{ deskripsi: { contains: searchTerm, mode: 'insensitive' } }, { hand_over: { contains: searchTerm, mode: 'insensitive' } }],
+        OR: [
+          { deskripsi: { contains: searchTerm, mode: 'insensitive' } },
+          { hand_over: { contains: searchTerm, mode: 'insensitive' } },
+        ],
       });
     }
 

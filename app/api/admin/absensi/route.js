@@ -26,7 +26,13 @@ export async function GET(req) {
 
   try {
     const { claims, session } = auth;
-    const actorId = claims?.sub || claims?.id_user || claims?.userId || claims?.id || session?.user?.id || session?.user?.id_user;
+    const actorId =
+      claims?.sub ||
+      claims?.id_user ||
+      claims?.userId ||
+      claims?.id ||
+      session?.user?.id ||
+      session?.user?.id_user;
 
     if (!actorId) {
       return NextResponse.json({ message: 'Payload token tidak sesuai' }, { status: 401 });

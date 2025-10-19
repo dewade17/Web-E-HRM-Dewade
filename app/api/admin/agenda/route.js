@@ -1,8 +1,8 @@
 // app/api/agenda/route.js
 import { NextResponse } from 'next/server';
-import db from '@/lib/prisma';
-import { verifyAuthToken } from '@/lib/jwt';
-import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import db from '../../../../lib/prisma';
+import { verifyAuthToken } from '../../../../lib/jwt';
+import { authenticateRequest } from '../../../../app/utils/auth/authUtils';
 
 // Hanya memastikan request terautentikasi (JWT atau NextAuth), tanpa resolve user/role
 async function ensureAuth(req) {

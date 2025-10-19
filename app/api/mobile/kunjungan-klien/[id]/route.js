@@ -15,8 +15,8 @@ const normRole = (r) =>
   String(r || '')
     .trim()
     .toUpperCase();
-const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR'].includes(normRole(role));
-const canManageAll = (role) => ['OPERASIONAL'].includes(normRole(role)); // hanya Operasional yang full manage
+const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR','SUPERADMIN'].includes(normRole(role));
+const canManageAll = (role) => ['OPERASIONAL','SUPERADMIN'].includes(normRole(role)); // hanya Operasional yang full manage
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -373,10 +373,7 @@ export async function PUT(req, { params }) {
     for (const field of coordinateFields) {
       if (!hasOwn(body, field)) continue;
       const value = body[field];
-      if (isNullLike(value)) {
-        data[field] = null;
-        continue;
-      }
+      if (isNullLike(value)) { data[field] = null; continue; }
       const numberValue = Number(value);
       if (Number.isNaN(numberValue)) {
         return NextResponse.json({ message: 'Field ' + field + ' tidak valid.' }, { status: 400 });

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import db from '@/lib/prisma';
+import db from '../../../../../lib/prisma';
 
 export async function POST(req) {
   try {

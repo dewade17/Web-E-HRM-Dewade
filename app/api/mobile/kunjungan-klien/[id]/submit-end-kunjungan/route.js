@@ -77,7 +77,7 @@ function sanitizePathPart(part) {
   return safe || 'unknown';
 }
 
-const RECIPIENT_ROLE_VALUES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR']);
+const RECIPIENT_ROLE_VALUES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
 const REPORT_STATUS_VALUES = new Set(['terkirim', 'disetujui', 'ditolak']);
 const RECIPIENT_FIELD_NAMES = ['recipients', 'report_recipients', 'kunjungan_report_recipients'];
 

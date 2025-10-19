@@ -33,8 +33,9 @@ async function ensureAuth(req) {
 }
 
 function guardOperational(actor) {
-  if (actor?.role !== 'OPERASIONAL') {
-    return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL yang dapat mengakses resource ini.' }, { status: 403 });
+  const role = String(actor?.role || '').trim().toUpperCase();
+  if (role !== 'OPERASIONAL' && role !== 'SUPERADMIN') {
+    return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' }, { status: 403 });
   }
   return null;
 }

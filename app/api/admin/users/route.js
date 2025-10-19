@@ -1,22 +1,19 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/prisma';
-import { verifyAuthToken } from '@/lib/jwt';
-import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import db from '../../../../lib/prisma';
+import { verifyAuthToken } from '../../../../lib/jwt';
+import { authenticateRequest } from '../../../utils/auth/authUtils';
 
 async function getActor(req) {
-  // 1) Bearer JWT
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
     try {
-      const payload = verifyAuthToken(auth.slice(7)); // { sub, role, email }
+      const payload = verifyAuthToken(auth.slice(7)); 
       return { id: payload?.sub || payload?.id_user || payload?.userId, role: payload?.role, source: 'bearer' };
     } catch (_) {
-      // fallback ke session
     }
   }
-  // 2) NextAuth session
   const sessionOrRes = await authenticateRequest();
-  if (sessionOrRes instanceof NextResponse) return sessionOrRes; // unauthorized
+  if (sessionOrRes instanceof NextResponse) return sessionOrRes; 
   return { id: sessionOrRes.user.id, role: sessionOrRes.user.role, source: 'session' };
 }
 
@@ -25,7 +22,7 @@ const ALLOWED_ORDER_BY = new Set(['created_at', 'updated_at', 'nama_pengguna', '
 export async function GET(req) {
   const actor = await getActor(req);
   if (actor instanceof NextResponse) return actor; // unauthorized
-  if (!['HR', 'DIREKTUR', 'OPERASIONAL'].includes(actor.role)) {
+  if (!['HR', 'DIREKTUR', 'OPERASIONAL', 'SUPERADMIN'].includes(actor.role)) {
     return NextResponse.json({ message: 'Forbidden: tidak memiliki akses.' }, { status: 403 });
   }
 
@@ -46,7 +43,6 @@ export async function GET(req) {
     const orderBy = ALLOWED_ORDER_BY.has(orderByParam) ? orderByParam : 'created_at';
     const sort = (searchParams.get('sort') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
-    // Build filter
     const where = {
       ...(includeDeleted ? {} : { deleted_at: null }),
       ...(role ? { role } : {}),

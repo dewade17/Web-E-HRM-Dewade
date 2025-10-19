@@ -1,11 +1,25 @@
+// app/api/admin/users/[id]/route.js
 export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
-import db from '@/lib/prisma';
-import { verifyAuthToken } from '@/lib/jwt';
-import { authenticateRequest } from '@/app/utils/auth/authUtils';
+import db from '../../../../../lib/prisma';
+import { verifyAuthToken } from '../../../../../lib/jwt';
+import { authenticateRequest } from '../../../../../app/utils/auth/authUtils';
 import { createClient } from '@supabase/supabase-js';
-import { JENIS_KELAMIN_VALUES, STATUS_KERJA_VALUES, normalizeNullableEnum, normalizeNullableInt, normalizeNullableString, normalizeOptionalDate } from '@/app/api/_utils/user-field-normalizer';
+import {
+  JENIS_KELAMIN_VALUES,
+  STATUS_KERJA_VALUES,
+  normalizeNullableEnum,
+  normalizeNullableInt,
+  normalizeNullableString,
+  normalizeOptionalDate,
+} from '../../../_utils/user-field-normalizer';
+
+// ===== Helpers umum =====
+const normRole = (r) => String(r || '').trim().toUpperCase();
+const VIEW_ROLES = new Set(['HR', 'DIREKTUR', 'SUPERADMIN']);
+const EDIT_ROLES = new Set(['HR', 'DIREKTUR', 'SUPERADMIN']);
+const DELETE_ROLES = new Set(['HR', 'DIREKTUR', 'SUPERADMIN']);
 
 // ===== Helpers: Auth (Admin) =====
 async function getAdminActor(req) {
@@ -14,19 +28,27 @@ async function getAdminActor(req) {
   if (auth.startsWith('Bearer ')) {
     try {
       const payload = verifyAuthToken(auth.slice(7));
-      return { id: payload?.sub || payload?.id_user || payload?.userId, role: payload?.role, source: 'bearer' };
+      return {
+        id: payload?.sub || payload?.id_user || payload?.userId,
+        role: normRole(payload?.role),
+        source: 'bearer',
+      };
     } catch (_) {
       // fallback ke session
     }
   }
   const sessionOrRes = await authenticateRequest();
   if (sessionOrRes instanceof NextResponse) return sessionOrRes; // unauthorized dari util
-  return { id: sessionOrRes.user.id, role: sessionOrRes.user.role, source: 'session' };
+  return {
+    id: sessionOrRes.user.id,
+    role: normRole(sessionOrRes.user.role),
+    source: 'session',
+  };
 }
 
 // ===== Helpers: Supabase Storage =====
 function getSupabase() {
-  const url = process.env.SUPABASE_URL;
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error('Supabase env tidak lengkap.');
   return createClient(url, key);
@@ -87,12 +109,12 @@ async function parseBody(req) {
   return { type: 'json', body: await req.json() };
 }
 
-// ===== GET (HR hanya) : detail user manapun =====
+// ===== GET : detail user (HR/DIREKTUR/SUPERADMIN) =====
 export async function GET(_req, { params }) {
   const actor = await getAdminActor(_req);
   if (actor instanceof NextResponse) return actor;
-  if (actor.role !== 'HR') {
-    return NextResponse.json({ message: 'Forbidden (HR only).' }, { status: 403 });
+  if (!VIEW_ROLES.has(actor.role)) {
+    return NextResponse.json({ message: 'Forbidden (HR/Direktur/Superadmin only).' }, { status: 403 });
   }
 
   try {
@@ -134,7 +156,7 @@ export async function GET(_req, { params }) {
         jenis_bank: true,
         created_at: true,
         updated_at: true,
-        departement: { select: { id_departement: true, nama_departement: true } },
+        departement: { select: { id_departement: true, nama_departement: true} },
         kantor: { select: { id_location: true, nama_kantor: true } },
         jabatan: { select: { id_jabatan: true, nama_jabatan: true } },
       },
@@ -147,13 +169,12 @@ export async function GET(_req, { params }) {
   }
 }
 
-// ===== PUT (HR only) : boleh ubah dept/location/role =====
-// ===== PUT (HR only) : boleh ubah dept/location/role =====
+// ===== PUT : update profil (HR/DIREKTUR/SUPERADMIN) =====
 export async function PUT(req, { params }) {
   const actor = await getAdminActor(req);
   if (actor instanceof NextResponse) return actor;
-  if (actor.role !== 'HR') {
-    return NextResponse.json({ message: 'Forbidden (HR only).' }, { status: 403 });
+  if (!EDIT_ROLES.has(actor.role)) {
+    return NextResponse.json({ message: 'Forbidden (HR/Direktur/Superadmin only).' }, { status: 403 });
   }
 
   try {
@@ -169,23 +190,28 @@ export async function PUT(req, { params }) {
 
     const wantsRemove = body.remove_foto === true || body.remove_foto === 'true';
 
-    const { value: tanggalLahirValue, error: tanggalLahirError } = normalizeOptionalDate(body.tanggal_lahir, 'tanggal_lahir');
+    const { value: tanggalLahirValue, error: tanggalLahirError } =
+      normalizeOptionalDate(body.tanggal_lahir, 'tanggal_lahir');
     if (tanggalLahirError) {
       return NextResponse.json({ message: tanggalLahirError }, { status: 400 });
     }
-    const { value: tanggalMulaiValue, error: tanggalMulaiError } = normalizeOptionalDate(body.tanggal_mulai_bekerja, 'tanggal_mulai_bekerja');
+    const { value: tanggalMulaiValue, error: tanggalMulaiError } =
+      normalizeOptionalDate(body.tanggal_mulai_bekerja, 'tanggal_mulai_bekerja');
     if (tanggalMulaiError) {
       return NextResponse.json({ message: tanggalMulaiError }, { status: 400 });
     }
-    const { value: tahunLulusValue, error: tahunLulusError } = normalizeNullableInt(body.tahun_lulus, 'tahun_lulus');
+    const { value: tahunLulusValue, error: tahunLulusError } =
+      normalizeNullableInt(body.tahun_lulus, 'tahun_lulus');
     if (tahunLulusError) {
       return NextResponse.json({ message: tahunLulusError }, { status: 400 });
     }
-    const { value: jenisKelaminValue, error: jenisKelaminError } = normalizeNullableEnum(body.jenis_kelamin, JENIS_KELAMIN_VALUES, 'jenis_kelamin');
+    const { value: jenisKelaminValue, error: jenisKelaminError } =
+      normalizeNullableEnum(body.jenis_kelamin, JENIS_KELAMIN_VALUES, 'jenis_kelamin');
     if (jenisKelaminError) {
       return NextResponse.json({ message: jenisKelaminError }, { status: 400 });
     }
-    const { value: statusKerjaValue, error: statusKerjaError } = normalizeNullableEnum(body.status_kerja, STATUS_KERJA_VALUES, 'status_kerja');
+    const { value: statusKerjaValue, error: statusKerjaError } =
+      normalizeNullableEnum(body.status_kerja, STATUS_KERJA_VALUES, 'status_kerja');
     if (statusKerjaError) {
       return NextResponse.json({ message: statusKerjaError }, { status: 400 });
     }
@@ -340,11 +366,11 @@ export async function PUT(req, { params }) {
   }
 }
 
-// ===== DELETE (HR/DIREKTUR) : soft delete =====
+// ===== DELETE : soft delete (HR/DIREKTUR/SUPERADMIN) =====
 export async function DELETE(req, { params }) {
   const actor = await getAdminActor(req);
   if (actor instanceof NextResponse) return actor;
-  if (!['HR', 'DIREKTUR'].includes(actor.role)) {
+  if (!DELETE_ROLES.has(actor.role)) {
     return NextResponse.json({ message: 'Forbidden: tidak memiliki akses.' }, { status: 403 });
   }
   try {

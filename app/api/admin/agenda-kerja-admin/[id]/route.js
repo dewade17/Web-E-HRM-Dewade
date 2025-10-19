@@ -6,6 +6,13 @@ import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateTimeToUTC } from '@/helpers/date-helper';
 import { sendNotification } from '@/app/utils/services/notificationService';
 
+const normRole = (r) =>
+  String(r || '')
+    .trim()
+    .toUpperCase();
+const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR','SUPERADMIN'].includes(normRole(role));
+const canManageAll = (role) => ['OPERASIONAL', 'SUPERADMIN'].includes(normRole(role));
+
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -33,9 +40,11 @@ async function ensureAuth(req) {
   };
 }
 
+// === FIXED: izinkan OPERASIONAL **dan** SUPERADMIN
 function guardOperational(actor) {
-  if (actor?.role !== 'OPERASIONAL') {
-    return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL yang dapat mengakses resource ini.' }, { status: 403 });
+  const role = String(actor?.role || '').trim().toUpperCase();
+  if (role !== 'OPERASIONAL' && role !== 'SUPERADMIN') {
+    return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' }, { status: 403 });
   }
   return null;
 }
@@ -83,8 +92,6 @@ function formatStatusDisplay(status) {
 export async function GET(request, { params }) {
   const auth = await ensureAuth(request);
   if (auth instanceof NextResponse) return auth;
-  const forbidden = guardOperational(auth.actor);
-  if (forbidden) return forbidden;
 
   try {
     const agenda = await db.agendaKerja.findFirst({

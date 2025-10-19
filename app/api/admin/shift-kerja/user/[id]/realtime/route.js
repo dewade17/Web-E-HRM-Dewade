@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
-import { parseDateOnlyToUTC } from '@/helpers/date-helper';
+import { parseDateOnlyToUTC } from '@/helpers/date-helper'; 
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
