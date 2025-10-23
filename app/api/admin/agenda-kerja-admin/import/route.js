@@ -1,3 +1,4 @@
+// app/api/admin/agenda-kerja-admin/import/route.js
 export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
@@ -9,7 +10,7 @@ const normRole = (r) =>
   String(r || '')
     .trim()
     .toUpperCase();
-const canManageAll = (role) => ['OPERASIONAL','SUPERADMIN'].includes(normRole(role));
+const canManageAll = (role) => ['OPERASIONAL', 'SUPERADMIN'].includes(normRole(role));
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -77,9 +78,14 @@ export async function POST(req) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
 
+      // Tiga kolom utama
       const tanggalRaw = row['Tanggal Proyek'] ?? row['Tanggal'] ?? row['Tanggal Aktivitas'] ?? row['tanggal proyek'] ?? row['tanggal'] ?? row['tanggal aktivitas'];
+
       const aktivitas = normText(row['Aktivitas'] ?? row['aktivitas'] ?? row['Deskripsi'] ?? row['deskripsi']);
+
       const proyekName = normText(row['Proyek/Agenda'] ?? row['Proyek'] ?? row['Agenda'] ?? row['proyek/agenda'] ?? row['proyek'] ?? row['agenda']);
+
+      // Kolom opsional (tetap didukung bila ada)
       const mulaiRaw = normText(row['Mulai'] ?? row['mulai']);
       const selesaiRaw = normText(row['Selesai'] ?? row['selesai']);
       const statusRaw = normText(row['Status'] ?? row['status']) || 'diproses';
@@ -93,7 +99,7 @@ export async function POST(req) {
         continue;
       }
 
-      // tanggal (YYYY-MM-DD atau Date Excel)
+      // Tanggal (YYYY-MM-DD atau Date dari Excel)
       let dateYMD = '';
       if (tanggalRaw instanceof Date && !Number.isNaN(tanggalRaw.getTime())) {
         const y = tanggalRaw.getUTCFullYear();
@@ -110,20 +116,35 @@ export async function POST(req) {
         dateYMD = s;
       }
 
+      // Parse waktu bila ada
       const startHM = parseHHmm(mulaiRaw);
       const endHM = parseHHmm(selesaiRaw);
-      const startDate = mulaiRaw && startHM.h != null ? makeUTC(dateYMD, startHM) : null;
-      const endDate = selesaiRaw && endHM.h != null ? makeUTC(dateYMD, endHM) : null;
+      let startDate = mulaiRaw && startHM.h != null ? makeUTC(dateYMD, startHM) : null;
+      let endDate = selesaiRaw && endHM.h != null ? makeUTC(dateYMD, endHM) : null;
+
+      // Kebijakan: kalau dua-duanya kosong, set sentinel 00:00:00 (bukan null)
+      if (!startDate && !endDate) {
+        const midnight = makeUTC(dateYMD, { h: 0, m: 0, s: 0 });
+        startDate = midnight;
+        endDate = midnight;
+      }
+      // Kalau salah satu kosong, samakan agar tidak null
+      if (startDate && !endDate) endDate = startDate;
+      if (!startDate && endDate) startDate = endDate;
+
       if (startDate && endDate && endDate < startDate) {
         errors.push({ row: i + 2, message: 'Selesai tidak boleh sebelum Mulai' });
         continue;
       }
 
-      // agenda case-insensitive
+      // Cari agenda TANPA 'mode: insensitive' (bikin error di Prisma-mu)
+      // Jika DB-mu MySQL dengan collation *_ci, ini sudah case-insensitive.
       let agenda = await db.agenda.findFirst({
-        where: { deleted_at: null, nama_agenda: { equals: proyekName, mode: 'insensitive' } },
+        where: { deleted_at: null, nama_agenda: proyekName },
         select: { id_agenda: true },
       });
+
+      // Kalau tidak ketemu dan diizinkan, buat agenda baru
       if (!agenda && createAgendaIfMissing) {
         agenda = await db.agenda.create({
           data: { nama_agenda: proyekName },
@@ -135,6 +156,8 @@ export async function POST(req) {
         continue;
       }
 
+      const duration = startDate && endDate ? Math.max(0, Math.floor((endDate - startDate) / 1000)) : 0;
+
       toCreate.push({
         id_user: userId,
         id_agenda: agenda.id_agenda,
@@ -142,7 +165,7 @@ export async function POST(req) {
         status: ['diproses', 'ditunda', 'selesai'].includes(statusRaw.toLowerCase()) ? statusRaw.toLowerCase() : 'diproses',
         start_date: startDate,
         end_date: endDate,
-        duration_seconds: startDate && endDate ? Math.max(0, Math.floor((endDate - startDate) / 1000)) : null,
+        duration_seconds: duration,
       });
     }
 
@@ -151,12 +174,20 @@ export async function POST(req) {
     }
 
     if (!toCreate.length) {
-      return NextResponse.json({ ok: true, message: 'Tidak ada baris valid untuk dibuat', summary: { created: 0 } });
+      return NextResponse.json({
+        ok: true,
+        message: 'Tidak ada baris valid untuk dibuat',
+        summary: { created: 0 },
+      });
     }
 
     await db.$transaction(toCreate.map((data) => db.agendaKerja.create({ data })));
 
-    return NextResponse.json({ ok: true, message: 'Impor selesai', summary: { created: toCreate.length } });
+    return NextResponse.json({
+      ok: true,
+      message: 'Impor selesai',
+      summary: { created: toCreate.length },
+    });
   } catch (err) {
     console.error('IMPORT agenda-kerja error:', err);
     return NextResponse.json({ ok: false, message: 'Gagal impor', detail: err?.message }, { status: 500 });
