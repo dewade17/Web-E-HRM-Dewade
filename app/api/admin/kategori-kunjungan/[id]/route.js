@@ -1,3 +1,4 @@
+// app/api/admin/kategori-kunjungan/[id]/route.js
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
@@ -15,9 +16,7 @@ async function ensureAuth(req) {
           source: 'bearer',
         },
       };
-    } catch (_) {
-      /* fallback ke NextAuth */
-    }
+    } catch (_) { /* fallback ke NextAuth */ }
   }
 
   const sessionOrRes = await authenticateRequest();
@@ -35,7 +34,10 @@ async function ensureAuth(req) {
 function guardOperational(actor) {
   const role = String(actor?.role || '').trim().toUpperCase();
   if (role !== 'OPERASIONAL' && role !== 'SUPERADMIN') {
-    return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' }, { status: 403 });
+    return NextResponse.json(
+      { message: 'Forbidden: hanya role OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' },
+      { status: 403 }
+    );
   }
   return null;
 }
@@ -46,7 +48,7 @@ export async function GET(req, { params }) {
 
   try {
     const { id } = params;
-    // Mengganti model dan field ID
+
     const data = await db.kategoriKunjungan.findUnique({
       where: { id_kategori_kunjungan: id },
       select: {
@@ -64,7 +66,7 @@ export async function GET(req, { params }) {
 
     return NextResponse.json({ data });
   } catch (err) {
-    console.error('GET /kategori-kunjungan/[id] error:', err);
+    console.error('GET /admin/kategori-kunjungan/[id] error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
@@ -108,7 +110,7 @@ export async function PUT(req, { params }) {
     if (err?.code === 'P2025') {
       return NextResponse.json({ message: 'Kategori kunjungan tidak ditemukan.' }, { status: 404 });
     }
-    console.error('PUT /kategori-kunjungan/[id] error:', err);
+    console.error('PUT /admin/kategori-kunjungan/[id] error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
@@ -120,30 +122,26 @@ export async function DELETE(req, { params }) {
   if (forbidden) return forbidden;
 
   try {
-    // Cek query parameter untuk hard delete
     const { searchParams } = new URL(req.url);
-    const isHardDelete = searchParams.get('hard') === 'true';
+    const isHardDelete = (searchParams.get('hard') || '').toLowerCase() === 'true';
 
     if (isHardDelete) {
-      // Hard delete: Hapus record dari database secara permanen
       await db.kategoriKunjungan.delete({
         where: { id_kategori_kunjungan: params.id },
       });
       return NextResponse.json({ message: 'Kategori kunjungan dihapus secara permanen (hard delete).' });
-    } else {
-      // Soft delete (default): Update kolom deleted_at
-      await db.kategoriKunjungan.update({
-        where: { id_kategori_kunjungan: params.id },
-        data: { deleted_at: new Date() },
-      });
-      return NextResponse.json({ message: 'Kategori kunjungan dihapus (soft delete).' });
     }
+
+    await db.kategoriKunjungan.update({
+      where: { id_kategori_kunjungan: params.id },
+      data: { deleted_at: new Date() },
+    });
+    return NextResponse.json({ message: 'Kategori kunjungan dihapus (soft delete).' });
   } catch (err) {
-    // Error P2025: Record to delete/update does not exist.
     if (err?.code === 'P2025') {
       return NextResponse.json({ message: 'Kategori kunjungan tidak ditemukan.' }, { status: 404 });
     }
-    console.error('DELETE /kategori-kunjungan/[id] error:', err);
+    console.error('DELETE /admin/kategori-kunjungan/[id] error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }

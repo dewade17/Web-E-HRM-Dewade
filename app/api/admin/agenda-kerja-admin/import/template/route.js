@@ -1,4 +1,3 @@
-// app/api/admin/agenda-kerja-admin/import/template/route.js
 export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
@@ -11,7 +10,7 @@ export async function GET() {
   const sample = [
     {
       'Tanggal Proyek': '2025-01-01',
-      Aktivitas: 'Contoh pekerjaan',
+      'Aktivitas': 'Contoh pekerjaan',
       'Proyek/Agenda': 'E-HRM',
     },
   ];

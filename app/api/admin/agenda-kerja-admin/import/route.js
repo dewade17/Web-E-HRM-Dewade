@@ -27,18 +27,14 @@ async function ensureAuth(req) {
 
 function parseHHmm(s) {
   if (!s) return { h: null, m: null, s: null };
-  const m = String(s)
-    .trim()
-    .match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  const m = String(s).trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (!m) return { h: null, m: null, s: null };
   return { h: Number(m[1]), m: Number(m[2]), s: m[3] ? Number(m[3]) : 0 };
 }
 function makeUTC(dateYMD, timeHM) {
   if (!dateYMD) return null;
   const [y, mo, d] = dateYMD.split('-').map(Number);
-  const h = timeHM?.h ?? 0,
-    mi = timeHM?.m ?? 0,
-    se = timeHM?.s ?? 0;
+  const h = timeHM?.h ?? 0, mi = timeHM?.m ?? 0, se = timeHM?.s ?? 0;
   if (!y || !mo || !d) return null;
   return new Date(Date.UTC(y, mo - 1, d, h, mi, se));
 }
@@ -162,7 +158,9 @@ export async function POST(req) {
         id_user: userId,
         id_agenda: agenda.id_agenda,
         deskripsi_kerja: aktivitas,
-        status: ['diproses', 'ditunda', 'selesai'].includes(statusRaw.toLowerCase()) ? statusRaw.toLowerCase() : 'diproses',
+        status: ['diproses', 'ditunda', 'selesai'].includes(statusRaw.toLowerCase())
+          ? statusRaw.toLowerCase()
+          : 'diproses',
         start_date: startDate,
         end_date: endDate,
         duration_seconds: duration,
@@ -170,7 +168,10 @@ export async function POST(req) {
     }
 
     if (errors.length) {
-      return NextResponse.json({ ok: false, message: 'Validasi impor gagal', errors, summary: { errors } }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, message: 'Validasi impor gagal', errors, summary: { errors } },
+        { status: 400 }
+      );
     }
 
     if (!toCreate.length) {
@@ -190,6 +191,9 @@ export async function POST(req) {
     });
   } catch (err) {
     console.error('IMPORT agenda-kerja error:', err);
-    return NextResponse.json({ ok: false, message: 'Gagal impor', detail: err?.message }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, message: 'Gagal impor', detail: err?.message },
+      { status: 500 }
+    );
   }
 }

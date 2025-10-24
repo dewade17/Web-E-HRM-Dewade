@@ -1,3 +1,4 @@
+// app/api/admin/kategori-kunjungan/route.js
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
@@ -15,9 +16,7 @@ async function ensureAuth(req) {
           source: 'bearer',
         },
       };
-    } catch (_) {
-      /* fallback ke NextAuth */
-    }
+    } catch (_) { /* fallback ke NextAuth */ }
   }
 
   const sessionOrRes = await authenticateRequest();
@@ -32,11 +31,13 @@ async function ensureAuth(req) {
   };
 }
 
-// Hanya untuk role tertentu, jika diperlukan
 function guardOperational(actor) {
   const role = String(actor?.role || '').trim().toUpperCase();
   if (role !== 'OPERASIONAL' && role !== 'SUPERADMIN') {
-    return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' }, { status: 403 });
+    return NextResponse.json(
+      { message: 'Forbidden: hanya role OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' },
+      { status: 403 }
+    );
   }
   return null;
 }
@@ -49,16 +50,25 @@ export async function GET(req) {
 
   try {
     const { searchParams } = new URL(req.url);
+
     const page = Math.max(parseInt(searchParams.get('page') || '1', 10), 1);
     const pageSize = Math.min(Math.max(parseInt(searchParams.get('pageSize') || '10', 10), 1), 100);
+
     const search = (searchParams.get('search') || '').trim();
+
+    // includeDeleted=1 => aktif+terhapus
     const includeDeleted = ['1', 'true'].includes((searchParams.get('includeDeleted') || '').toLowerCase());
+    // deletedOnly=1 => hanya yang terhapus
+    const deletedOnly = ['1', 'true'].includes((searchParams.get('deletedOnly') || '').toLowerCase());
+
     const orderByParam = (searchParams.get('orderBy') || 'created_at').trim();
     const orderBy = ALLOWED_ORDER_BY.has(orderByParam) ? orderByParam : 'created_at';
     const sort = (searchParams.get('sort') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
+    // where
     const where = {
-      ...(includeDeleted ? {} : { deleted_at: null }),
+      ...(deletedOnly ? { deleted_at: { not: null } } : {}),
+      ...(!includeDeleted && !deletedOnly ? { deleted_at: null } : {}),
       ...(search
         ? {
             kategori_kunjungan: {
@@ -69,7 +79,6 @@ export async function GET(req) {
         : {}),
     };
 
-    // Mengganti db.masterDataKunjungan menjadi db.kategoriKunjungan
     const [total, data] = await Promise.all([
       db.kategoriKunjungan.count({ where }),
       db.kategoriKunjungan.findMany({
@@ -78,7 +87,7 @@ export async function GET(req) {
         skip: (page - 1) * pageSize,
         take: pageSize,
         select: {
-          id_kategori_kunjungan: true, // Field ID diperbarui
+          id_kategori_kunjungan: true,
           kategori_kunjungan: true,
           created_at: true,
           updated_at: true,
@@ -97,7 +106,7 @@ export async function GET(req) {
       },
     });
   } catch (err) {
-    console.error('GET /kategori-kunjungan error:', err);
+    console.error('GET /admin/kategori-kunjungan error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
@@ -118,11 +127,10 @@ export async function POST(req) {
 
     const kategori_kunjungan = String(rawKategori).trim();
 
-    // Mengganti db.masterDataKunjungan menjadi db.kategoriKunjungan
     const created = await db.kategoriKunjungan.create({
       data: { kategori_kunjungan },
       select: {
-        id_kategori_kunjungan: true, // Field ID diperbarui
+        id_kategori_kunjungan: true,
         kategori_kunjungan: true,
         created_at: true,
       },
@@ -133,7 +141,7 @@ export async function POST(req) {
     if (err?.code === 'P2002') {
       return NextResponse.json({ message: 'Kategori kunjungan sudah terdaftar.' }, { status: 409 });
     }
-    console.error('POST /kategori-kunjungan error:', err);
+    console.error('POST /admin/kategori-kunjungan error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
