@@ -5,10 +5,18 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
-
+import { sendNotification } from '@/app/utils/services/notificationService';
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 
 const pengajuanInclude = {
+  user: {
+    select: {
+      id_user: true,
+      nama_pengguna: true,
+      email: true,
+      role: true,
+    },
+  },
   kategori_cuti: {
     select: {
       id_kategori_cuti: true,
@@ -29,6 +37,42 @@ const pengajuanInclude = {
     },
   },
 };
+
+const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
+  day: '2-digit',
+  month: 'long',
+  year: 'numeric',
+});
+
+function formatDateISO(value) {
+  if (!value) return '-';
+  try {
+    return value.toISOString().split('T')[0];
+  } catch (err) {
+    try {
+      const asDate = new Date(value);
+      if (Number.isNaN(asDate.getTime())) return '-';
+      return asDate.toISOString().split('T')[0];
+    } catch (_) {
+      return '-';
+    }
+  }
+}
+
+function formatDateDisplay(value) {
+  if (!value) return '-';
+  try {
+    return dateDisplayFormatter.format(value);
+  } catch (err) {
+    try {
+      const asDate = new Date(value);
+      if (Number.isNaN(asDate.getTime())) return '-';
+      return dateDisplayFormatter.format(asDate);
+    } catch (_) {
+      return '-';
+    }
+  }
+}
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -299,6 +343,78 @@ export async function POST(req) {
       where: { id_pengajuan_cuti: pengajuan.id_pengajuan_cuti },
       include: pengajuanInclude,
     });
+
+    if (fullPengajuan) {
+      const deeplink = `/pengajuan-cuti/${fullPengajuan.id_pengajuan_cuti}`;
+      const basePayload = {
+        nama_pemohon: fullPengajuan.user?.nama_pengguna || 'Rekan',
+        kategori_cuti: fullPengajuan.kategori_cuti?.nama_kategori || '-',
+        tanggal_mulai: formatDateISO(fullPengajuan.tanggal_mulai),
+        tanggal_mulai_display: formatDateDisplay(fullPengajuan.tanggal_mulai),
+        tanggal_masuk_kerja: formatDateISO(fullPengajuan.tanggal_masuk_kerja),
+        tanggal_masuk_kerja_display: formatDateDisplay(fullPengajuan.tanggal_masuk_kerja),
+        keperluan: fullPengajuan.keperluan || '-',
+        handover: fullPengajuan.handover || '-',
+        related_table: 'pengajuan_cuti',
+        related_id: fullPengajuan.id_pengajuan_cuti,
+        deeplink,
+      };
+
+      const notifiedUsers = new Set();
+      const notifPromises = [];
+
+      if (Array.isArray(fullPengajuan.handover_users)) {
+        for (const handoverUser of fullPengajuan.handover_users) {
+          const taggedId = handoverUser?.id_user_tagged;
+          if (!taggedId || notifiedUsers.has(taggedId)) continue;
+          notifiedUsers.add(taggedId);
+
+          const overrideTitle = `${basePayload.nama_pemohon} mengajukan cuti`;
+          const overrideBody = `${basePayload.nama_pemohon} menandai Anda sebagai handover cuti (${basePayload.kategori_cuti}) pada ${basePayload.tanggal_mulai_display}.`;
+
+          notifPromises.push(
+            sendNotification(
+              'LEAVE_HANDOVER_TAGGED',
+              taggedId,
+              {
+                ...basePayload,
+                nama_penerima: handoverUser?.user?.nama_pengguna || undefined,
+                title: overrideTitle,
+                body: overrideBody,
+                overrideTitle,
+                overrideBody,
+              },
+              { deeplink }
+            )
+          );
+        }
+      }
+
+      if (fullPengajuan.id_user && !notifiedUsers.has(fullPengajuan.id_user)) {
+        const overrideTitle = 'Pengajuan cuti berhasil dikirim';
+        const overrideBody = `Pengajuan cuti ${basePayload.kategori_cuti} pada ${basePayload.tanggal_mulai_display} telah berhasil dibuat.`;
+
+        notifPromises.push(
+          sendNotification(
+            'LEAVE_HANDOVER_TAGGED',
+            fullPengajuan.id_user,
+            {
+              ...basePayload,
+              is_pemohon: true,
+              title: overrideTitle,
+              body: overrideBody,
+              overrideTitle,
+              overrideBody,
+            },
+            { deeplink }
+          )
+        );
+      }
+
+      if (notifPromises.length) {
+        await Promise.allSettled(notifPromises);
+      }
+    }
 
     return NextResponse.json({
       ok: true,

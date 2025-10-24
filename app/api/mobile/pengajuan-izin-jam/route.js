@@ -3,6 +3,7 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, parseDateTimeToUTC, startOfUTCDay, endOfUTCDay } from '@/helpers/date-helper';
+import { sendNotification } from '@/app/utils/services/notificationService';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -30,6 +31,63 @@ const baseInclude = {
     },
   },
 };
+
+const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
+  day: '2-digit',
+  month: 'long',
+  year: 'numeric',
+});
+
+const timeDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+function formatDateISO(value) {
+  if (!value) return '-';
+  try {
+    return value.toISOString().split('T')[0];
+  } catch (err) {
+    try {
+      const asDate = new Date(value);
+      if (Number.isNaN(asDate.getTime())) return '-';
+      return asDate.toISOString().split('T')[0];
+    } catch (_) {
+      return '-';
+    }
+  }
+}
+
+function formatDateDisplay(value) {
+  if (!value) return '-';
+  try {
+    return dateDisplayFormatter.format(value);
+  } catch (err) {
+    try {
+      const asDate = new Date(value);
+      if (Number.isNaN(asDate.getTime())) return '-';
+      return dateDisplayFormatter.format(asDate);
+    } catch (_) {
+      return '-';
+    }
+  }
+}
+
+function formatTimeDisplay(value) {
+  if (!value) return '-';
+  try {
+    return timeDisplayFormatter.format(value);
+  } catch (err) {
+    try {
+      const asDate = new Date(value);
+      if (Number.isNaN(asDate.getTime())) return '-';
+      return timeDisplayFormatter.format(asDate);
+    } catch (_) {
+      return '-';
+    }
+  }
+}
 
 const normRole = (role) =>
   String(role || '')
@@ -309,6 +367,105 @@ export async function POST(req) {
         include: baseInclude,
       });
     });
+
+    if (result) {
+      const deeplink = `/pengajuan-izin-jam/${result.id_pengajuan_izin_jam}`;
+      const waktuRentangDisplay = `${formatTimeDisplay(result.jam_mulai)} - ${formatTimeDisplay(result.jam_selesai)}`;
+      const basePayload = {
+        nama_pemohon: result.user?.nama_pengguna || 'Rekan',
+        kategori_izin: result.kategori || '-',
+        tanggal_izin: formatDateISO(result.tanggal_izin),
+        tanggal_izin_display: formatDateDisplay(result.tanggal_izin),
+        jam_mulai: result.jam_mulai instanceof Date ? result.jam_mulai.toISOString() : null,
+        jam_mulai_display: formatTimeDisplay(result.jam_mulai),
+        jam_selesai: result.jam_selesai instanceof Date ? result.jam_selesai.toISOString() : null,
+        jam_selesai_display: formatTimeDisplay(result.jam_selesai),
+        rentang_waktu_display: waktuRentangDisplay,
+        keperluan: result.keperluan || '-',
+        handover: result.handover || '-',
+        related_table: 'pengajuan_izin_jam',
+        related_id: result.id_pengajuan_izin_jam,
+        deeplink,
+      };
+
+      const notifiedUsers = new Set();
+      const notifPromises = [];
+
+      if (Array.isArray(result.handover_users)) {
+        for (const handoverUser of result.handover_users) {
+          const taggedId = handoverUser?.id_user_tagged;
+          if (!taggedId || notifiedUsers.has(taggedId)) continue;
+          notifiedUsers.add(taggedId);
+
+          const overrideTitle = `${basePayload.nama_pemohon} mengajukan izin jam`;
+          const overrideBody = `${basePayload.nama_pemohon} menandai Anda sebagai handover untuk izin jam ${basePayload.kategori_izin} pada ${basePayload.tanggal_izin_display} (${waktuRentangDisplay}).`;
+
+          notifPromises.push(
+            sendNotification(
+              'IZIN_JAM_HANDOVER_TAGGED',
+              taggedId,
+              {
+                ...basePayload,
+                nama_penerima: handoverUser?.user?.nama_pengguna || undefined,
+                title: overrideTitle,
+                body: overrideBody,
+                overrideTitle,
+                overrideBody,
+              },
+              { deeplink }
+            )
+          );
+        }
+      }
+
+      if (result.id_user && !notifiedUsers.has(result.id_user)) {
+        const overrideTitle = 'Pengajuan izin jam berhasil dikirim';
+        const overrideBody = `Pengajuan izin jam ${basePayload.kategori_izin} pada ${basePayload.tanggal_izin_display} (${waktuRentangDisplay}) telah berhasil dibuat.`;
+
+        notifPromises.push(
+          sendNotification(
+            'IZIN_JAM_HANDOVER_TAGGED',
+            result.id_user,
+            {
+              ...basePayload,
+              is_pemohon: true,
+              title: overrideTitle,
+              body: overrideBody,
+              overrideTitle,
+              overrideBody,
+            },
+            { deeplink }
+          )
+        );
+        notifiedUsers.add(result.id_user);
+      }
+
+      if (canManageAll(actorRole) && actorId && !notifiedUsers.has(actorId)) {
+        const overrideTitle = 'Pengajuan izin jam berhasil dibuat';
+        const overrideBody = `Pengajuan izin jam untuk ${basePayload.nama_pemohon} pada ${basePayload.tanggal_izin_display} (${waktuRentangDisplay}) telah disimpan.`;
+
+        notifPromises.push(
+          sendNotification(
+            'IZIN_JAM_HANDOVER_TAGGED',
+            actorId,
+            {
+              ...basePayload,
+              is_admin: true,
+              title: overrideTitle,
+              body: overrideBody,
+              overrideTitle,
+              overrideBody,
+            },
+            { deeplink }
+          )
+        );
+        notifiedUsers.add(actorId);
+      }
+
+      if (notifPromises.length) {
+        await Promise.allSettled(notifPromises);
+      }
+    }
 
     return NextResponse.json({ message: 'Pengajuan izin jam berhasil dibuat.', data: result }, { status: 201 });
   } catch (err) {
