@@ -88,6 +88,15 @@ const notificationTemplates = [
     bodyTemplate: '{nama_penerima}, {nama_pemohon} menandai Anda sebagai handover cuti {kategori_cuti} mulai {tanggal_mulai_display} hingga masuk kembali {tanggal_masuk_kerja_display}.',
     placeholders: '{nama_penerima}, {nama_pemohon}, {kategori_cuti}, {tanggal_mulai}, {tanggal_mulai_display}, {tanggal_masuk_kerja}, {tanggal_masuk_kerja_display}, {keperluan}, {handover}',
   },
+
+  {
+    eventTrigger: 'IZIN_SAKIT_HANDOVER_TAGGED',
+    description: 'Notifikasi saat pengajuan izin sakit dibuat dan handover/pihak terkait perlu diberi tahu',
+    titleTemplate: '🩺 Pengajuan Izin Sakit {nama_pemohon}',
+    bodyTemplate: 'Halo {nama_penerima}, {pesan_penerima} Pengajuan izin sakit {kategori_sakit} dari {nama_pemohon}. Status saat ini: {status_display}. Catatan handover: {catatan_handover}.',
+    placeholders: '{nama_penerima}, {pesan_penerima}, {nama_pemohon}, {kategori_sakit}, {catatan_handover}, {status}, {status_display}, {current_level}, {lampiran_izin_sakit_url}',
+  },
+
   {
     eventTrigger: 'IZIN_JAM_HANDOVER_TAGGED',
     description: 'Notifikasi saat user ditandai terkait pengajuan izin jam',

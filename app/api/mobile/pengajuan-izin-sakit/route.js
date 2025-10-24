@@ -43,6 +43,13 @@ const normRole = (role) =>
     .toUpperCase();
 const canManageAll = (role) => ADMIN_ROLES.has(normRole(role));
 
+const formatStatusDisplay = (status) => {
+  if (!status) return 'Pending';
+  const normalized = String(status).trim();
+  if (!normalized) return 'Pending';
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1).toLowerCase();
+};
+
 function isNullLike(value) {
   if (value === null || value === undefined) return true;
   if (typeof value === 'string') {
@@ -287,16 +294,21 @@ export async function POST(req) {
 
     if (result) {
       const deeplink = `/pengajuan-izin-sakit/${result.id_pengajuan_izin_sakit}`;
+      const statusValue = result.status || 'pending';
       const basePayload = {
         nama_pemohon: result.user?.nama_pengguna || 'Rekan',
         kategori_sakit: result.kategori?.nama_kategori || '-',
         handover: result.handover || '-',
-        status: result.status || 'pending',
+        catatan_handover: result.handover || '-',
+        status: statusValue,
+        status_display: formatStatusDisplay(statusValue),
         current_level: result.current_level ?? null,
         lampiran_izin_sakit_url: result.lampiran_izin_sakit_url || null,
         related_table: 'pengajuan_izin_sakit',
         related_id: result.id_pengajuan_izin_sakit,
         deeplink,
+        nama_penerima: 'Rekan',
+        pesan_penerima: 'Pengajuan izin sakit baru telah dibuat.',
       };
 
       const notifiedUsers = new Set();
@@ -317,11 +329,8 @@ export async function POST(req) {
               taggedId,
               {
                 ...basePayload,
-                nama_penerima: handoverUser?.user?.nama_pengguna || undefined,
-                title: overrideTitle,
-                body: overrideBody,
-                overrideTitle,
-                overrideBody,
+                nama_penerima: handoverUser?.user?.nama_pengguna || 'Rekan',
+                pesan_penerima: `Anda ditunjuk sebagai handover oleh ${basePayload.nama_pemohon}.`,
               },
               { deeplink }
             )
@@ -340,10 +349,8 @@ export async function POST(req) {
             {
               ...basePayload,
               is_pemohon: true,
-              title: overrideTitle,
-              body: overrideBody,
-              overrideTitle,
-              overrideBody,
+              nama_penerima: basePayload.nama_pemohon || 'Rekan',
+              pesan_penerima: 'Pengajuan izin sakit Anda berhasil dikirim ke admin.',
             },
             { deeplink }
           )
@@ -362,10 +369,8 @@ export async function POST(req) {
             {
               ...basePayload,
               is_admin: true,
-              title: overrideTitle,
-              body: overrideBody,
-              overrideTitle,
-              overrideBody,
+              nama_penerima: 'Admin',
+              pesan_penerima: `Pengajuan izin sakit untuk ${basePayload.nama_pemohon} memerlukan tindak lanjut Anda.`,
             },
             { deeplink }
           )
