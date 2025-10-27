@@ -24,7 +24,7 @@ function buildInclude() {
     approvals: {
       orderBy: { level: 'asc' },
       select: {
-        id_approval_pengajuan_izin_jam: true,
+        id_approval_izin_tukar_hari: true,
         level: true,
         approver_user_id: true,
         approver_role: true,
@@ -55,9 +55,9 @@ async function handleDecision(req, { params }) {
     return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
   }
 
-  const id = params?.id;
-  if (!id) {
-    return NextResponse.json({ message: 'id wajib diisi.' }, { status: 400 });
+  const approvalId = params?.approvalId;
+  if (!approvalId) {
+    return NextResponse.json({ message: 'approvalId wajib diisi.' }, { status: 400 });
   }
 
   let body;
@@ -76,12 +76,12 @@ async function handleDecision(req, { params }) {
 
   try {
     const result = await db.$transaction(async (tx) => {
-      const approvalRecord = await tx.approvalPengajuanIzinJam.findUnique({
-        where: { id_approval_pengajuan_izin_jam: id },
+      const approvalRecord = await tx.approvalIzinTukarHari.findUnique({
+        where: { id_approval_izin_tukar_hari: approvalId },
         include: {
-          pengajuan_izin_jam: {
+          izin_tukar_hari: {
             select: {
-              id_pengajuan_izin_jam: true,
+              id_izin_tukar_hari: true,
               id_user: true,
               status: true,
               current_level: true,
@@ -95,7 +95,7 @@ async function handleDecision(req, { params }) {
         throw NextResponse.json({ message: 'Approval tidak ditemukan.' }, { status: 404 });
       }
 
-      if (!approvalRecord.pengajuan_izin_jam || approvalRecord.pengajuan_izin_jam.deleted_at) {
+      if (!approvalRecord.izin_tukar_hari || approvalRecord.izin_tukar_hari.deleted_at) {
         throw NextResponse.json({ message: 'Pengajuan tidak ditemukan.' }, { status: 404 });
       }
 
@@ -110,16 +110,16 @@ async function handleDecision(req, { params }) {
         throw NextResponse.json({ message: 'Approval sudah memiliki keputusan.' }, { status: 409 });
       }
 
-      const updatedApproval = await tx.approvalPengajuanIzinJam.update({
-        where: { id_approval_pengajuan_izin_jam: id },
+      const updatedApproval = await tx.approvalIzinTukarHari.update({
+        where: { id_approval_izin_tukar_hari: approvalId },
         data: {
           decision,
           note,
           decided_at: new Date(),
         },
         select: {
-          id_approval_pengajuan_izin_jam: true,
-          id_pengajuan_izin_jam: true,
+          id_approval_izin_tukar_hari: true,
+          id_izin_tukar_hari: true,
           level: true,
           decision: true,
           note: true,
@@ -127,11 +127,11 @@ async function handleDecision(req, { params }) {
         },
       });
 
-      const approvals = await tx.approvalPengajuanIzinJam.findMany({
-        where: { id_pengajuan_izin_jam: approvalRecord.id_pengajuan_izin_jam, deleted_at: null },
+      const approvals = await tx.approvalIzinTukarHari.findMany({
+        where: { id_izin_tukar_hari: approvalRecord.id_izin_tukar_hari, deleted_at: null },
         orderBy: { level: 'asc' },
         select: {
-          id_approval_pengajuan_izin_jam: true,
+          id_approval_izin_tukar_hari: true,
           level: true,
           approver_user_id: true,
           approver_role: true,
@@ -154,14 +154,14 @@ async function handleDecision(req, { params }) {
 
       let submission;
       if (Object.keys(parentUpdate).length) {
-        submission = await tx.pengajuanIzinJam.update({
-          where: { id_pengajuan_izin_jam: approvalRecord.id_pengajuan_izin_jam },
+        submission = await tx.izinTukarHari.update({
+          where: { id_izin_tukar_hari: approvalRecord.id_izin_tukar_hari },
           data: parentUpdate,
           include: buildInclude(),
         });
       } else {
-        submission = await tx.pengajuanIzinJam.findUnique({
-          where: { id_pengajuan_izin_jam: approvalRecord.id_pengajuan_izin_jam },
+        submission = await tx.izinTukarHari.findUnique({
+          where: { id_izin_tukar_hari: approvalRecord.id_izin_tukar_hari },
           include: buildInclude(),
         });
       }
@@ -174,19 +174,19 @@ async function handleDecision(req, { params }) {
 
     if (submission?.id_user) {
       const decisionDisplay = decision === 'disetujui' ? 'disetujui' : 'ditolak';
-      const overrideTitle = `Pengajuan izin jam ${decisionDisplay}`;
-      const overrideBody = `Pengajuan izin jam Anda telah ${decisionDisplay}.`;
-      const deeplink = `/pengajuan-izin-jam/${submission.id_pengajuan_izin_jam}`;
+      const overrideTitle = `Pengajuan izin tukar hari ${decisionDisplay}`;
+      const overrideBody = `Pengajuan izin tukar hari Anda telah ${decisionDisplay}.`;
+      const deeplink = `/pengajuan-izin-tukar-hari/${submission.id_izin_tukar_hari}`;
 
       await sendNotification(
-        'IZIN_JAM_APPROVAL_DECIDED',
+        'IZIN_TUKAR_HARI_APPROVAL_DECIDED',
         submission.id_user,
         {
           decision,
           note: approval?.note || undefined,
           approval_level: approval?.level,
-          related_table: 'pengajuan_izin_jam',
-          related_id: submission.id_pengajuan_izin_jam,
+          related_table: 'izin_tukar_hari',
+          related_id: submission.id_izin_tukar_hari,
           overrideTitle,
           overrideBody,
         },
@@ -197,7 +197,7 @@ async function handleDecision(req, { params }) {
     return NextResponse.json({ message: 'Keputusan approval berhasil disimpan.', data: submission });
   } catch (err) {
     if (err instanceof NextResponse) return err;
-    console.error('PATCH /mobile/pengajuan-izin-jam/approvals error:', err);
+    console.error('PATCH /mobile/pengajuan-izin-tukar-hari/approvals error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
