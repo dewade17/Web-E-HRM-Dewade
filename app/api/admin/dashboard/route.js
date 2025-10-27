@@ -23,7 +23,7 @@ const PERFORMANCE_TABS = [
   { key: 'onTime', label: 'Tepat Waktu' },
   { key: 'late', label: 'Terlambat' },
   { key: 'absent', label: 'Tidak/belum hadir' },
-  { key: 'autoOut', label: 'Presensi Keluar Otomatis' },
+  // { key: 'autoOut', label: 'Presensi Keluar Otomatis' },
   { key: 'leave', label: 'Cuti' },
   { key: 'permit', label: 'Izin' },
 ];

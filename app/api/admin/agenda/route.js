@@ -38,7 +38,7 @@ export async function GET(request) {
 
     const where = { deleted_at: null };
     if (q) {
-      where.nama_agenda = { contains: q, mode: 'insensitive' };
+      where.nama_agenda = { contains: q };
     }
 
     const [total, items] = await Promise.all([

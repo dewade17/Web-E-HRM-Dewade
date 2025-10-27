@@ -7,7 +7,7 @@ import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateTimeToUTC } from '@/helpers/date-helper';
 
-const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
+const VALID_STATUS = ['teragenda', 'diproses', 'ditunda', 'selesai'];
 
 function toDateOrNull(v) {
   if (!v) return null;

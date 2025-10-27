@@ -22,7 +22,7 @@ async function ensureAuth(req) {
   return true;
 }
 
-const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
+const VALID_STATUS = ['teragenda', 'diproses', 'ditunda', 'selesai'];
 
 function toDateOrNull(v) {
   if (!v) return null;

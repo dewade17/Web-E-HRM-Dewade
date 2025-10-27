@@ -10,7 +10,7 @@ const normRole = (r) =>
   String(r || '')
     .trim()
     .toUpperCase();
-const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR','SUPERADMIN'].includes(normRole(role));
+const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR', 'SUPERADMIN'].includes(normRole(role));
 const canManageAll = (role) => ['OPERASIONAL', 'SUPERADMIN'].includes(normRole(role));
 
 async function ensureAuth(req) {
@@ -42,14 +42,16 @@ async function ensureAuth(req) {
 
 // === FIXED: izinkan OPERASIONAL **dan** SUPERADMIN
 function guardOperational(actor) {
-  const role = String(actor?.role || '').trim().toUpperCase();
+  const role = String(actor?.role || '')
+    .trim()
+    .toUpperCase();
   if (role !== 'OPERASIONAL' && role !== 'SUPERADMIN') {
     return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' }, { status: 403 });
   }
   return null;
 }
 
-const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
+const VALID_STATUS = ['teragenda', 'diproses', 'ditunda', 'selesai'];
 
 function toDateOrNull(v) {
   if (!v) return null;

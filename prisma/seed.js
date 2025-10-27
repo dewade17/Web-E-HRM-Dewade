@@ -113,6 +113,7 @@ const notificationTemplates = [
     bodyTemplate: 'Anda dijadwalkan untuk kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} {rentang_waktu_display}. Mohon persiapkan kebutuhan kunjungan.',
     placeholders: '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan}, {tanggal_kunjungan_display}, {rentang_waktu_display}',
   },
+
   {
     eventTrigger: 'CLIENT_VISIT_UPDATED',
     description: 'Notifikasi saat detail kunjungan klien diperbarui',

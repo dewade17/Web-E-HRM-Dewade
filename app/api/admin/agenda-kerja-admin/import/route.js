@@ -6,10 +6,8 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 
-const normRole = (r) =>
-  String(r || '')
-    .trim()
-    .toUpperCase();
+/* ===================== Auth helpers ===================== */
+const normRole = (r) => String(r || '').trim().toUpperCase();
 const canManageAll = (role) => ['OPERASIONAL', 'SUPERADMIN'].includes(normRole(role));
 
 async function ensureAuth(req) {
@@ -25,6 +23,32 @@ async function ensureAuth(req) {
   return { actor: { id: sessionOrRes?.user?.id || sessionOrRes?.user?.id_user, role: sessionOrRes?.user?.role } };
 }
 
+/* ===================== String normalizers ===================== */
+/** Samakan berbagai tanda minus/hyphen ke '-' */
+function normalizeDashes(s) {
+  return String(s || '').replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-');
+}
+
+/** Hilangkan aksen (opsional, aman untuk Latin) */
+function stripDiacritics(s) {
+  return String(s || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+/** Kunci normalisasi untuk pencocokan nama agenda (case/whitespace/hyphen insensitive) */
+function makeAgendaKey(raw) {
+  const s = normalizeDashes(stripDiacritics(String(raw || '').normalize('NFKC')));
+  return s.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/** Tampilan bersih untuk nama agenda (rapikan spasi & hyphen) */
+function cleanAgendaDisplay(raw) {
+  const s = normalizeDashes(String(raw || '').normalize('NFKC'));
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/* ===================== Parse helpers ===================== */
 function parseHHmm(s) {
   if (!s) return { h: null, m: null, s: null };
   const m = String(s).trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
@@ -42,6 +66,7 @@ function normText(s) {
   return String(s || '').trim();
 }
 
+/* ===================== Main: POST (import) ===================== */
 export async function POST(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -62,11 +87,22 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, message: 'user_id wajib dikirim (target karyawan)' }, { status: 400 });
     }
 
+    // Baca Excel
     const ab = await file.arrayBuffer();
     const XLSX = await import('xlsx');
     const wb = XLSX.read(ab, { type: 'array', cellDates: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+    // === PRELOAD semua agenda aktif & buat index normalisasi ===
+    const agendas = await db.agenda.findMany({
+      where: { deleted_at: null },
+      select: { id_agenda: true, nama_agenda: true },
+    });
+    const agendaIndex = new Map();
+    for (const a of agendas) {
+      agendaIndex.set(makeAgendaKey(a.nama_agenda), a); // key -> {id_agenda, nama_agenda}
+    }
 
     const errors = [];
     const toCreate = [];
@@ -74,14 +110,30 @@ export async function POST(req) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
 
-      // Tiga kolom utama
-      const tanggalRaw = row['Tanggal Proyek'] ?? row['Tanggal'] ?? row['Tanggal Aktivitas'] ?? row['tanggal proyek'] ?? row['tanggal'] ?? row['tanggal aktivitas'];
+      // Kolom wajib
+      const tanggalRaw =
+        row['Tanggal Proyek'] ??
+        row['Tanggal'] ??
+        row['Tanggal Aktivitas'] ??
+        row['tanggal proyek'] ??
+        row['tanggal'] ??
+        row['tanggal aktivitas'];
 
-      const aktivitas = normText(row['Aktivitas'] ?? row['aktivitas'] ?? row['Deskripsi'] ?? row['deskripsi']);
+      const aktivitas = normText(
+        row['Aktivitas'] ?? row['aktivitas'] ?? row['Deskripsi'] ?? row['deskripsi']
+      );
 
-      const proyekName = normText(row['Proyek/Agenda'] ?? row['Proyek'] ?? row['Agenda'] ?? row['proyek/agenda'] ?? row['proyek'] ?? row['agenda']);
+      const proyekNameRaw =
+        row['Proyek/Agenda'] ??
+        row['Proyek'] ??
+        row['Agenda'] ??
+        row['proyek/agenda'] ??
+        row['proyek'] ??
+        row['agenda'];
 
-      // Kolom opsional (tetap didukung bila ada)
+      const proyekName = normText(proyekNameRaw);
+
+      // Opsional
       const mulaiRaw = normText(row['Mulai'] ?? row['mulai']);
       const selesaiRaw = normText(row['Selesai'] ?? row['selesai']);
       const statusRaw = normText(row['Status'] ?? row['status']) || 'diproses';
@@ -95,7 +147,7 @@ export async function POST(req) {
         continue;
       }
 
-      // Tanggal (YYYY-MM-DD atau Date dari Excel)
+      // Tanggal (YYYY-MM-DD atau Date Excel)
       let dateYMD = '';
       if (tanggalRaw instanceof Date && !Number.isNaN(tanggalRaw.getTime())) {
         const y = tanggalRaw.getUTCFullYear();
@@ -112,19 +164,18 @@ export async function POST(req) {
         dateYMD = s;
       }
 
-      // Parse waktu bila ada
+      // Parse waktu (jika ada)
       const startHM = parseHHmm(mulaiRaw);
       const endHM = parseHHmm(selesaiRaw);
       let startDate = mulaiRaw && startHM.h != null ? makeUTC(dateYMD, startHM) : null;
       let endDate = selesaiRaw && endHM.h != null ? makeUTC(dateYMD, endHM) : null;
 
-      // Kebijakan: kalau dua-duanya kosong, set sentinel 00:00:00 (bukan null)
+      // Sentinel & fallback waktu
       if (!startDate && !endDate) {
         const midnight = makeUTC(dateYMD, { h: 0, m: 0, s: 0 });
         startDate = midnight;
         endDate = midnight;
       }
-      // Kalau salah satu kosong, samakan agar tidak null
       if (startDate && !endDate) endDate = startDate;
       if (!startDate && endDate) startDate = endDate;
 
@@ -133,26 +184,28 @@ export async function POST(req) {
         continue;
       }
 
-      // Cari agenda TANPA 'mode: insensitive' (bikin error di Prisma-mu)
-      // Jika DB-mu MySQL dengan collation *_ci, ini sudah case-insensitive.
-      let agenda = await db.agenda.findFirst({
-        where: { deleted_at: null, nama_agenda: proyekName },
-        select: { id_agenda: true },
-      });
+      // === Pencocokan agenda: pakai kunci normalisasi ===
+      const key = makeAgendaKey(proyekName);
+      let agenda = agendaIndex.get(key);
 
-      // Kalau tidak ketemu dan diizinkan, buat agenda baru
-      if (!agenda && createAgendaIfMissing) {
-        agenda = await db.agenda.create({
-          data: { nama_agenda: proyekName },
-          select: { id_agenda: true },
-        });
-      }
+      // Tidak ketemu → buat baru jika diizinkan
       if (!agenda) {
-        errors.push({ row: i + 2, message: `Proyek/Agenda '${proyekName}' tidak ditemukan` });
-        continue;
+        if (!createAgendaIfMissing) {
+          errors.push({ row: i + 2, message: `Proyek/Agenda '${proyekName}' tidak ditemukan` });
+          continue;
+        }
+        // Rapikan nama untuk display
+        const display = cleanAgendaDisplay(proyekName);
+        agenda = await db.agenda.create({
+          data: { nama_agenda: display },
+          select: { id_agenda: true, nama_agenda: true },
+        });
+        // Masukkan ke cache agar baris berikutnya tidak menggandakan lagi
+        agendaIndex.set(key, agenda);
       }
 
-      const duration = startDate && endDate ? Math.max(0, Math.floor((endDate - startDate) / 1000)) : 0;
+      const duration =
+        startDate && endDate ? Math.max(0, Math.floor((endDate - startDate) / 1000)) : 0;
 
       toCreate.push({
         id_user: userId,

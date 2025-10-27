@@ -73,7 +73,6 @@ export async function GET(req) {
         ? {
             kategori_kunjungan: {
               contains: search,
-              mode: 'insensitive',
             },
           }
         : {}),

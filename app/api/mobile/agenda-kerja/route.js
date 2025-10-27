@@ -64,7 +64,7 @@ function formatDateTimeDisplay(value) {
   }
 }
 
-const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
+const VALID_STATUS = ['teragenda', 'diproses', 'ditunda', 'selesai'];
 
 const MIN_RANGE_DATE = startOfUTCDay('1970-01-01') ?? new Date(Date.UTC(1970, 0, 1));
 const MAX_RANGE_DATE = endOfUTCDay('2999-12-31') ?? new Date(Date.UTC(2999, 11, 31, 23, 59, 59, 999));
@@ -177,7 +177,7 @@ export async function POST(request) {
     }
     // --- AKHIR PERBAIKAN ---
 
-    const statusValue = String(body.status || 'diproses').toLowerCase();
+    const statusValue = String(body.status || 'teragenda').toLowerCase();
     if (!VALID_STATUS.includes(statusValue)) {
       return NextResponse.json({ ok: false, message: 'status tidak valid' }, { status: 400 });
     }

@@ -6,9 +6,12 @@ import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { endOfUTCDay, parseDateTimeToUTC, startOfUTCDay } from '@/helpers/date-helper';
 import { sendNotification } from '@/app/utils/services/notificationService';
 
-const normRole = (r) => String(r || '').trim().toUpperCase();
+const normRole = (r) =>
+  String(r || '')
+    .trim()
+    .toUpperCase();
 const canSeeAll = (role) => ['OPERASIONAL', 'HR', 'DIREKTUR', 'SUPERADMIN'].includes(normRole(role));
-const canManageAll = (role) => ['OPERASIONAL', 'SUPERADMIN', ].includes(normRole(role));
+const canManageAll = (role) => ['OPERASIONAL', 'SUPERADMIN'].includes(normRole(role));
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -16,7 +19,9 @@ async function ensureAuth(req) {
     try {
       const payload = verifyAuthToken(auth.slice(7));
       return { actor: { id: payload?.sub || payload?.id_user || payload?.userId, role: payload?.role, source: 'bearer' } };
-    } catch {/* fallback ke NextAuth */}
+    } catch {
+      /* fallback ke NextAuth */
+    }
   }
   const sessionOrRes = await authenticateRequest();
   if (sessionOrRes instanceof NextResponse) return sessionOrRes;
@@ -25,38 +30,49 @@ async function ensureAuth(req) {
 
 // === FIXED: izinkan OPERASIONAL **dan** SUPERADMIN
 function guardOperational(actor) {
-  const role = String(actor?.role || '').trim().toUpperCase();
+  const role = String(actor?.role || '')
+    .trim()
+    .toUpperCase();
   if (role !== 'OPERASIONAL' && role !== 'SUPERADMIN') {
     return NextResponse.json({ message: 'Forbidden: hanya role OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' }, { status: 403 });
   }
   return null;
 }
 
-function toDateOrNull(v) { if (!v) return null; const parsed = parseDateTimeToUTC(v); return parsed ?? null; }
+function toDateOrNull(v) {
+  if (!v) return null;
+  const parsed = parseDateTimeToUTC(v);
+  return parsed ?? null;
+}
 const startOfDay = (d) => startOfUTCDay(d);
 const endOfDay = (d) => endOfUTCDay(d);
 
 function overlapRangeFilter(fromSOD, toEOD) {
   return {
-    AND: [
-      { OR: [{ start_date: null }, { start_date: { lte: toEOD } }] },
-      { OR: [{ end_date: null }, { end_date: { gte: fromSOD } }] },
-    ],
+    AND: [{ OR: [{ start_date: null }, { start_date: { lte: toEOD } }] }, { OR: [{ end_date: null }, { end_date: { gte: fromSOD } }] }],
   };
 }
 
-function formatDateTime(value) { if (!value) return '-'; try { return value.toISOString(); } catch { return '-'; } }
+function formatDateTime(value) {
+  if (!value) return '-';
+  try {
+    return value.toISOString();
+  } catch {
+    return '-';
+  }
+}
 function formatDateTimeDisplay(value) {
   if (!value) return '';
   try {
-    return new Intl.DateTimeFormat('id-ID', { dateStyle: 'long', timeStyle: 'short' })
-      .format(value instanceof Date ? value : new Date(value));
-  } catch { return ''; }
+    return new Intl.DateTimeFormat('id-ID', { dateStyle: 'long', timeStyle: 'short' }).format(value instanceof Date ? value : new Date(value));
+  } catch {
+    return '';
+  }
 }
 
-const VALID_STATUS = ['diproses', 'ditunda', 'selesai'];
-const MIN_RANGE_DATE = startOfUTCDay('1970-01-01') ?? new Date(Date.UTC(1970,0,1));
-const MAX_RANGE_DATE = endOfUTCDay('2999-12-31') ?? new Date(Date.UTC(2999,11,31,23,59,59,999));
+const VALID_STATUS = ['teragenda', 'diproses', 'ditunda', 'selesai'];
+const MIN_RANGE_DATE = startOfUTCDay('1970-01-01') ?? new Date(Date.UTC(1970, 0, 1));
+const MAX_RANGE_DATE = endOfUTCDay('2999-12-31') ?? new Date(Date.UTC(2999, 11, 31, 23, 59, 59, 999));
 
 export async function GET(request) {
   const auth = await ensureAuth(request);
@@ -147,9 +163,9 @@ export async function GET(request) {
       const sheetRows = items.map((r) => ({
         'Proyek/Agenda': r.agenda?.nama_agenda || '',
         'Tanggal Proyek': fmtDate(r.start_date || r.end_date || r.created_at),
-        'Aktivitas': r.deskripsi_kerja || '',
-        'Durasi': fmtDuration(r.duration_seconds),
-        'Status': r.status || 'diproses',
+        Aktivitas: r.deskripsi_kerja || '',
+        Durasi: fmtDuration(r.duration_seconds),
+        Status: r.status || 'teragenda',
       }));
 
       const wb = XLSX.utils.book_new();
@@ -199,16 +215,13 @@ export async function POST(request) {
     if (!id_agenda) return NextResponse.json({ ok: false, message: 'id_agenda wajib diisi' }, { status: 400 });
     if (!deskripsi_kerja) return NextResponse.json({ ok: false, message: 'deskripsi_kerja wajib diisi' }, { status: 400 });
 
-    const [userExists, agendaExists] = await Promise.all([
-      db.user.findUnique({ where: { id_user: id_user }, select: { id_user: true } }),
-      db.agenda.findUnique({ where: { id_agenda: id_agenda }, select: { id_agenda: true } }),
-    ]);
+    const [userExists, agendaExists] = await Promise.all([db.user.findUnique({ where: { id_user: id_user }, select: { id_user: true } }), db.agenda.findUnique({ where: { id_agenda: id_agenda }, select: { id_agenda: true } })]);
 
     if (!userExists) return NextResponse.json({ ok: false, message: 'User dengan ID yang diberikan tidak ditemukan.' }, { status: 404 });
     if (!agendaExists) return NextResponse.json({ ok: false, message: 'Agenda dengan ID yang diberikan tidak ditemukan.' }, { status: 404 });
 
-    const statusValue = String(body.status || 'diproses').toLowerCase();
-    if (!['diproses','ditunda','selesai'].includes(statusValue)) {
+    const statusValue = String(body.status || 'teragenda').toLowerCase();
+    if (!['teragenda', 'diproses', 'ditunda', 'selesai'].includes(statusValue)) {
       return NextResponse.json({ ok: false, message: 'status tidak valid' }, { status: 400 });
     }
 
@@ -224,8 +237,13 @@ export async function POST(request) {
     }
 
     const data = {
-      id_user, id_agenda, deskripsi_kerja,
-      status: statusValue, start_date, end_date, duration_seconds,
+      id_user,
+      id_agenda,
+      deskripsi_kerja,
+      status: statusValue,
+      start_date,
+      end_date,
+      duration_seconds,
       id_absensi: body.id_absensi ?? null,
     };
 
@@ -245,24 +263,29 @@ export async function POST(request) {
     const adminBody = [`Admin menambahkan agenda kerja "${agendaTitle}" untuk Anda.`, friendlyDeadline ? `Selesaikan sebelum ${friendlyDeadline}.` : ''].filter(Boolean).join(' ').trim();
 
     try {
-      await sendNotification('NEW_AGENDA_ASSIGNED', created.id_user, {
-        nama_karyawan: created.user?.nama_pengguna || 'Karyawan',
-        judul_agenda: agendaTitle,
-        tanggal_deadline: formatDateTime(created.end_date),
-        tanggal_deadline_display: friendlyDeadline,
-        pemberi_tugas: 'Panel Admin',
-        title: adminTitle,
-        body: adminBody,
-        overrideTitle: adminTitle,
-        overrideBody: adminBody,
-        related_table: 'agenda_kerja',
-        related_id: created.id_agenda_kerja,
-        deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
-      }, {
-        dedupeKey: `NEW_AGENDA_ASSIGNED:${created.id_agenda_kerja}`,
-        collapseKey: `AGENDA_${created.id_agenda_kerja}`,
-        deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
-      });
+      await sendNotification(
+        'NEW_AGENDA_ASSIGNED',
+        created.id_user,
+        {
+          nama_karyawan: created.user?.nama_pengguna || 'Karyawan',
+          judul_agenda: agendaTitle,
+          tanggal_deadline: formatDateTime(created.end_date),
+          tanggal_deadline_display: friendlyDeadline,
+          pemberi_tugas: 'Panel Admin',
+          title: adminTitle,
+          body: adminBody,
+          overrideTitle: adminTitle,
+          overrideBody: adminBody,
+          related_table: 'agenda_kerja',
+          related_id: created.id_agenda_kerja,
+          deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
+        },
+        {
+          dedupeKey: `NEW_AGENDA_ASSIGNED:${created.id_agenda_kerja}`,
+          collapseKey: `AGENDA_${created.id_agenda_kerja}`,
+          deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
+        }
+      );
     } catch (notifErr) {
       console.error('[NOTIF] gagal:', notifErr);
     }
