@@ -6,6 +6,12 @@ import { sendNotification } from '@/app/utils/services/notificationService';
 const DECISION_ALLOWED = new Set(['disetujui', 'ditolak']);
 const PENDING_DECISIONS = new Set(['pending', 'menunggu']);
 
+const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
+  day: '2-digit',
+  month: 'long',
+  year: 'numeric',
+});
+
 function normalizeDecision(value) {
   if (!value) return null;
   const normalized = String(value).trim().toLowerCase();
@@ -43,6 +49,151 @@ function summarizeApprovalStatus(approvals) {
   const highestApprovedLevel = anyApproved ? approved.reduce((acc, curr) => (curr.level > acc ? curr.level : acc), approved[0].level) : null;
 
   return { anyApproved, allRejected, highestApprovedLevel };
+}
+
+function toDateOnly(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function addDays(date, amount) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  const result = new Date(date.getTime());
+  result.setUTCDate(result.getUTCDate() + amount);
+  return result;
+}
+
+function formatDateKey(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDateDisplay(value) {
+  const date = toDateOnly(value);
+  if (!date) return '-';
+  try {
+    return dateDisplayFormatter.format(date);
+  } catch (err) {
+    console.warn('Gagal memformat tanggal untuk tampilan:', err);
+    return formatDateKey(date);
+  }
+}
+
+function getShiftOverlapRange(shift, rangeStart, rangeEnd) {
+  const start = shift?.tanggal_mulai ? toDateOnly(shift.tanggal_mulai) : null;
+  const endRaw = shift?.tanggal_selesai ? toDateOnly(shift.tanggal_selesai) : null;
+  const startDate = start || endRaw || rangeStart;
+  const endDate = endRaw || start || rangeEnd;
+  if (!startDate || !endDate) return null;
+
+  if (endDate < rangeStart) return null;
+  if (startDate > rangeEnd) return null;
+
+  const overlapStart = startDate < rangeStart ? rangeStart : startDate;
+  const overlapEnd = endDate > rangeEnd ? rangeEnd : endDate;
+
+  if (overlapStart > overlapEnd) return null;
+  return { start: overlapStart, end: overlapEnd };
+}
+
+async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDate }) {
+  if (!tx || !userId || !startDate) {
+    return { updatedCount: 0, createdCount: 0, affectedDates: [] };
+  }
+
+  const leaveStart = toDateOnly(startDate);
+  if (!leaveStart) {
+    return { updatedCount: 0, createdCount: 0, affectedDates: [] };
+  }
+
+  const rawReturn = toDateOnly(returnDate);
+  const leaveEnd = rawReturn && rawReturn > leaveStart ? addDays(rawReturn, -1) : leaveStart;
+  const effectiveEnd = leaveEnd && leaveEnd >= leaveStart ? leaveEnd : leaveStart;
+
+  const affectedDates = [];
+  for (let cursor = new Date(leaveStart.getTime()); cursor <= effectiveEnd; cursor = addDays(cursor, 1)) {
+    affectedDates.push(new Date(cursor.getTime()));
+  }
+  if (!affectedDates.length) {
+    affectedDates.push(leaveStart);
+  }
+
+  const existingShifts = await tx.shiftKerja.findMany({
+    where: {
+      id_user: userId,
+      deleted_at: null,
+      AND: [
+        {
+          OR: [{ tanggal_mulai: null }, { tanggal_mulai: { lte: effectiveEnd } }],
+        },
+        {
+          OR: [{ tanggal_selesai: null }, { tanggal_selesai: { gte: leaveStart } }],
+        },
+      ],
+    },
+    select: {
+      id_shift_kerja: true,
+      tanggal_mulai: true,
+      tanggal_selesai: true,
+      status: true,
+    },
+  });
+
+  const updates = [];
+  const updatedIds = [];
+  for (const shift of existingShifts) {
+    const overlap = getShiftOverlapRange(shift, leaveStart, effectiveEnd);
+    if (!overlap) continue;
+    if (shift.status !== 'LIBUR') {
+      updates.push(
+        tx.shiftKerja.update({
+          where: { id_shift_kerja: shift.id_shift_kerja },
+          data: { status: 'LIBUR' },
+        })
+      );
+      updatedIds.push(shift.id_shift_kerja);
+    }
+  }
+
+  if (updates.length) {
+    await Promise.all(updates);
+  }
+
+  const coverage = new Set();
+  for (const shift of existingShifts) {
+    const overlap = getShiftOverlapRange(shift, leaveStart, effectiveEnd);
+    if (!overlap) continue;
+    for (let cursor = new Date(overlap.start.getTime()); cursor <= overlap.end; cursor = addDays(cursor, 1)) {
+      coverage.add(formatDateKey(cursor));
+    }
+  }
+
+  const missingDates = [];
+  for (const date of affectedDates) {
+    const key = formatDateKey(date);
+    if (!coverage.has(key)) {
+      missingDates.push(new Date(date.getTime()));
+    }
+  }
+
+  let createdCount = 0;
+  if (missingDates.length) {
+    const data = missingDates.map((date) => ({
+      id_user: userId,
+      tanggal_mulai: date,
+      tanggal_selesai: date,
+      hari_kerja: 'LIBUR',
+      status: 'LIBUR',
+      id_pola_kerja: null,
+    }));
+
+    const createResult = await tx.shiftKerja.createMany({ data, skipDuplicates: true });
+    createdCount = createResult?.count ?? data.length;
+  }
+
+  return { updatedCount: updatedIds.length, createdCount, affectedDates };
 }
 
 async function handleDecision(req, { params }) {
@@ -84,6 +235,8 @@ async function handleDecision(req, { params }) {
               id_pengajuan_cuti: true,
               id_user: true,
               status: true,
+              tanggal_mulai: true,
+              tanggal_masuk_kerja: true,
               current_level: true,
               deleted_at: true,
             },
@@ -153,17 +306,40 @@ async function handleDecision(req, { params }) {
       }
 
       let submission;
+      let shiftSyncResult = { updatedCount: 0, createdCount: 0, affectedDates: [] };
       if (Object.keys(parentUpdate).length) {
         submission = await tx.pengajuanCuti.update({
           where: { id_pengajuan_cuti: approvalRecord.id_pengajuan_cuti },
           data: parentUpdate,
           include: buildInclude(),
         });
+        if (parentUpdate.status === 'disetujui') {
+          const targetUserId = submission?.id_user || approvalRecord.pengajuan_cuti?.id_user;
+          const tanggalMulai = submission?.tanggal_mulai || approvalRecord.pengajuan_cuti?.tanggal_mulai;
+          const tanggalMasukKerja = submission?.tanggal_masuk_kerja || approvalRecord.pengajuan_cuti?.tanggal_masuk_kerja;
+          try {
+            shiftSyncResult = await syncShiftLiburForApprovedLeave(tx, {
+              userId: targetUserId,
+              startDate: tanggalMulai,
+              returnDate: tanggalMasukKerja,
+            });
+          } catch (shiftErr) {
+            console.error('Gagal menyelaraskan shift kerja selama cuti:', shiftErr);
+            throw NextResponse.json(
+              {
+                ok: false,
+                message: 'Terjadi kesalahan saat menyelaraskan jadwal shift pemohon.',
+              },
+              { status: 500 }
+            );
+          }
+        }
       } else {
         submission = await tx.pengajuanCuti.findUnique({
           where: { id_pengajuan_cuti: approvalRecord.id_pengajuan_cuti },
           include: buildInclude(),
         });
+        return { submission, approval: updatedApproval, shiftSyncResult };
       }
 
       return { submission, approval: updatedApproval };
@@ -171,6 +347,7 @@ async function handleDecision(req, { params }) {
 
     const submission = result?.submission;
     const approval = result?.approval;
+    const shiftSyncResult = result?.shiftSyncResult;
 
     if (submission?.id_user) {
       const decisionDisplay = decision === 'disetujui' ? 'disetujui' : 'ditolak';
@@ -191,6 +368,41 @@ async function handleDecision(req, { params }) {
           overrideBody,
         },
         { deeplink }
+      );
+    }
+
+    if (decision === 'disetujui' && submission?.id_user && shiftSyncResult && (shiftSyncResult.updatedCount > 0 || shiftSyncResult.createdCount > 0)) {
+      const affectedDates = Array.isArray(shiftSyncResult.affectedDates) ? shiftSyncResult.affectedDates : [];
+      const sortedDates = affectedDates
+        .map((d) => toDateOnly(d))
+        .filter(Boolean)
+        .sort((a, b) => a.getTime() - b.getTime());
+      const firstDate = sortedDates[0];
+      const lastDate = sortedDates[sortedDates.length - 1] || firstDate;
+      const periodeMulai = firstDate ? formatDateKey(firstDate) : undefined;
+      const periodeSelesai = lastDate ? formatDateKey(lastDate) : undefined;
+      const periodeMulaiDisplay = formatDateDisplay(firstDate);
+      const periodeSelesaiDisplay = formatDateDisplay(lastDate);
+
+      const overrideTitle = 'Jadwal kerja diperbarui selama cuti';
+      const overrideBody = `Shift Anda pada periode ${periodeMulaiDisplay} - ${periodeSelesaiDisplay} telah disesuaikan menjadi LIBUR.`;
+
+      await sendNotification(
+        'SHIFT_LEAVE_ADJUSTMENT',
+        submission.id_user,
+        {
+          periode_mulai: periodeMulai,
+          periode_mulai_display: periodeMulaiDisplay,
+          periode_selesai: periodeSelesai,
+          periode_selesai_display: periodeSelesaiDisplay,
+          updated_shift: shiftSyncResult.updatedCount,
+          created_shift: shiftSyncResult.createdCount,
+          related_table: 'pengajuan_cuti',
+          related_id: submission.id_pengajuan_cuti,
+          overrideTitle,
+          overrideBody,
+        },
+        { deeplink: '/shift-kerja' }
       );
     }
 

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { ensureAuth, baseInclude } from '../../route';
 import { sendNotification } from '@/app/utils/services/notificationService';
+import { applyShiftSwapForIzinTukarHari } from '../../helpers/shiftAdjuster';
 
 const DECISION_ALLOWED = new Set(['disetujui', 'ditolak']);
 const PENDING_DECISIONS = new Set(['pending', 'menunggu']);
@@ -83,6 +84,8 @@ async function handleDecision(req, { params }) {
             select: {
               id_izin_tukar_hari: true,
               id_user: true,
+              hari_izin: true,
+              hari_pengganti: true,
               status: true,
               current_level: true,
               deleted_at: true,
@@ -143,16 +146,22 @@ async function handleDecision(req, { params }) {
 
       const { anyApproved, allRejected, highestApprovedLevel } = summarizeApprovalStatus(approvals);
       const parentUpdate = {};
+      const previousStatus = approvalRecord.izin_tukar_hari.status;
 
       if (anyApproved) {
-        parentUpdate.status = 'disetujui';
-        parentUpdate.current_level = highestApprovedLevel;
+        if (previousStatus !== 'disetujui') {
+          parentUpdate.status = 'disetujui';
+        }
+        if (typeof highestApprovedLevel === 'number' && approvalRecord.izin_tukar_hari.current_level !== highestApprovedLevel) {
+          parentUpdate.current_level = highestApprovedLevel;
+        }
       } else if (allRejected) {
         parentUpdate.status = 'ditolak';
         parentUpdate.current_level = null;
       }
 
       let submission;
+      let shiftAdjustmentResult = null;
       if (Object.keys(parentUpdate).length) {
         submission = await tx.izinTukarHari.update({
           where: { id_izin_tukar_hari: approvalRecord.id_izin_tukar_hari },
@@ -165,12 +174,42 @@ async function handleDecision(req, { params }) {
           include: buildInclude(),
         });
       }
+      if (decision === 'disetujui' && previousStatus !== 'disetujui') {
+        try {
+          shiftAdjustmentResult = await applyShiftSwapForIzinTukarHari(tx, approvalRecord.izin_tukar_hari);
+        } catch (shiftErr) {
+          console.error('Gagal memperbarui shift tukar hari:', shiftErr);
+          shiftAdjustmentResult = {
+            adjustments: [],
+            issues: [
+              {
+                message: 'Terjadi kesalahan saat memperbarui jadwal shift pemohon.',
+                detail: shiftErr?.message || String(shiftErr),
+              },
+            ],
+          };
+        }
+      }
 
-      return { submission, approval: updatedApproval };
+      return { submission, approval: updatedApproval, shiftAdjustment: shiftAdjustmentResult };
     });
 
     const submission = result?.submission;
     const approval = result?.approval;
+    const shiftAdjustment = result?.shiftAdjustment;
+    let responseData = submission;
+    if (submission) {
+      responseData = {
+        ...submission,
+        ...(shiftAdjustment?.adjustments?.length ? { shift_adjustments: shiftAdjustment.adjustments } : {}),
+        ...(shiftAdjustment?.issues?.length ? { shift_adjustment_issues: shiftAdjustment.issues } : {}),
+      };
+    } else if (shiftAdjustment) {
+      responseData = {
+        ...(shiftAdjustment?.adjustments?.length ? { shift_adjustments: shiftAdjustment.adjustments } : {}),
+        ...(shiftAdjustment?.issues?.length ? { shift_adjustment_issues: shiftAdjustment.issues } : {}),
+      };
+    }
 
     if (submission?.id_user) {
       const decisionDisplay = decision === 'disetujui' ? 'disetujui' : 'ditolak';
@@ -187,6 +226,8 @@ async function handleDecision(req, { params }) {
           approval_level: approval?.level,
           related_table: 'izin_tukar_hari',
           related_id: submission.id_izin_tukar_hari,
+          shift_adjustments: shiftAdjustment?.adjustments,
+          shift_adjustment_issues: shiftAdjustment?.issues,
           overrideTitle,
           overrideBody,
         },
@@ -194,7 +235,7 @@ async function handleDecision(req, { params }) {
       );
     }
 
-    return NextResponse.json({ message: 'Keputusan approval berhasil disimpan.', data: submission });
+    return NextResponse.json({ message: 'Keputusan approval berhasil disimpan.', data: responseData });
   } catch (err) {
     if (err instanceof NextResponse) return err;
     console.error('PATCH /mobile/pengajuan-izin-tukar-hari/approvals error:', err);
