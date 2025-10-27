@@ -748,12 +748,6 @@
       @@map("cuti_konfigurasi")
     }
 
-
-    // ===== MODEL KonfigurasiCutiUser DIHAPUS =====
-
-
-    // ===== MODEL BARU DITAMBAHKAN DI BAWAH INI =====
-
     // ===== BARU: Kategori Cuti (Sesuai Kategori Sakit) =====
     model KategoriCuti {
       id_kategori_cuti String    @id @default(uuid()) @db.Char(36)
