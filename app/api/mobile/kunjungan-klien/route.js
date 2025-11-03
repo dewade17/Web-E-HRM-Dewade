@@ -240,6 +240,23 @@ export async function POST(req) {
     // RBAC: Operasional boleh menetapkan rencana untuk user lain; lainnya pakai dirinya sendiri
     const targetUserId = canManageAll(actorRole) && !isNullLike(body.id_user) ? String(body.id_user).trim() : actorId;
 
+    // Snapshot pembuat (user/actor yang membuat entri kunjungan dari mobile)
+    let created_by_snapshot = null;
+    try {
+      const creator = await db.user.findUnique({
+        where: { id_user: String(actorId) },
+        select: { nama_pengguna: true, email: true, role: true },
+      });
+      const label = creator?.nama_pengguna || creator?.email || String(actorId);
+      const role = creator?.role || actorRole || '';
+      created_by_snapshot = [label, role ? `(${String(role)})` : null]
+        .filter(Boolean)
+        .join(' ')
+        .slice(0, 255);
+    } catch (_) {
+      created_by_snapshot = null;
+    }
+
     const data = {
       id_user: targetUserId, // <-- perbaikan inti
       id_kategori_kunjungan: String(id_kategori_kunjungan).trim(),
@@ -248,6 +265,7 @@ export async function POST(req) {
       jam_mulai: jamMulaiDate,
       jam_selesai: jamSelesaiDate,
       status_kunjungan: 'diproses',
+      created_by_snapshot,
     };
 
     const created = await db.kunjungan.create({

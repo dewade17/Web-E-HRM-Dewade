@@ -137,6 +137,24 @@ function sanitizeHandoverIds(ids) {
   return Array.from(unique);
 }
 
+function resolveJenisPengajuan(input, expected) {
+  const fallback = expected;
+  if (input === undefined || input === null) return { ok: true, value: fallback };
+
+  const trimmed = String(input).trim();
+  if (!trimmed) return { ok: true, value: fallback };
+
+  const normalized = trimmed.toLowerCase().replace(/[-\s]+/g, '_');
+  if (normalized !== expected) {
+    return {
+      ok: false,
+      message: `jenis_pengajuan harus bernilai '${expected}'.`,
+    };
+  }
+
+  return { ok: true, value: fallback };
+}
+
 export async function GET(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -270,6 +288,11 @@ export async function POST(req) {
     const tanggal_masuk_raw = body?.tanggal_masuk_kerja;
     const keperluan = body?.keperluan === undefined || body?.keperluan === null ? null : String(body.keperluan);
     const handover = body?.handover === undefined || body?.handover === null ? null : String(body.handover);
+    const jenisPengajuanResult = resolveJenisPengajuan(body?.jenis_pengajuan, 'cuti');
+    if (!jenisPengajuanResult.ok) {
+      return NextResponse.json({ ok: false, message: jenisPengajuanResult.message }, { status: 400 });
+    }
+    const jenis_pengajuan = jenisPengajuanResult.value;
 
     if (!id_kategori_cuti) {
       return NextResponse.json({ ok: false, message: 'id_kategori_cuti wajib diisi.' }, { status: 400 });
@@ -323,6 +346,7 @@ export async function POST(req) {
           tanggal_mulai,
           tanggal_masuk_kerja,
           handover,
+          jenis_pengajuan,
         },
       });
 

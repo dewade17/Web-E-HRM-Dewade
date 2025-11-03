@@ -67,6 +67,24 @@ function normalizeLampiranInput(value) {
   return String(value).trim();
 }
 
+function resolveJenisPengajuan(input, expected) {
+  const fallback = expected;
+  if (input === undefined || input === null) return { ok: true, value: fallback };
+
+  const trimmed = String(input).trim();
+  if (!trimmed) return { ok: true, value: fallback };
+
+  const normalized = trimmed.toLowerCase().replace(/[-\s]+/g, '_');
+  if (normalized !== expected) {
+    return {
+      ok: false,
+      message: `jenis_pengajuan harus bernilai '${expected}'.`,
+    };
+  }
+
+  return { ok: true, value: fallback };
+}
+
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -242,6 +260,12 @@ export async function POST(req) {
       return NextResponse.json({ message: 'current_level harus berupa angka.' }, { status: 400 });
     }
 
+    const jenisPengajuanResult = resolveJenisPengajuan(body.jenis_pengajuan, 'izin_sakit');
+    if (!jenisPengajuanResult.ok) {
+      return NextResponse.json({ message: jenisPengajuanResult.message }, { status: 400 });
+    }
+    const jenis_pengajuan = jenisPengajuanResult.value;
+
     const tagUserIds = parseTagUserIds(body.tag_user_ids ?? body.handover_user_ids);
     await validateTaggedUsers(tagUserIds);
 
@@ -273,6 +297,7 @@ export async function POST(req) {
           lampiran_izin_sakit_url: lampiran ?? null,
           status: statusRaw,
           current_level: currentLevel,
+          jenis_pengajuan,
         },
       });
 

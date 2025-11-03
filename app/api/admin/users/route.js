@@ -17,7 +17,7 @@ async function getActor(req) {
   return { id: sessionOrRes.user.id, role: sessionOrRes.user.role, source: 'session' };
 }
 
-const ALLOWED_ORDER_BY = new Set(['created_at', 'updated_at', 'nama_pengguna', 'email', 'role']);
+const ALLOWED_ORDER_BY = new Set(['created_at', 'updated_at', 'nama_pengguna', 'email', 'role', 'status_cuti']);
 
 export async function GET(req) {
   const actor = await getActor(req);
@@ -34,6 +34,8 @@ export async function GET(req) {
 
     const search = (searchParams.get('search') || '').trim();
     const role = (searchParams.get('role') || '').trim();
+    const statusCutiParam = (searchParams.get('statusCuti') || '').trim().toLowerCase();
+    const statusCuti = statusCutiParam === 'aktif' || statusCutiParam === 'nonaktif' ? statusCutiParam : '';
     const departementId = (searchParams.get('departementId') || '').trim();
     const locationId = (searchParams.get('locationId') || '').trim();
     const jabatanId = (searchParams.get('jabatanId') || '').trim();
@@ -47,6 +49,7 @@ export async function GET(req) {
       ...(includeDeleted ? {} : { deleted_at: null }),
       ...(role ? { role } : {}),
       ...(departementId ? { id_departement: departementId } : {}),
+      ...(statusCuti ? { status_cuti: statusCuti } : {}),
       ...(locationId ? { id_location: locationId } : {}),
       ...(jabatanId ? { id_jabatan: jabatanId } : {}),
       ...(namaPengguna ? { nama_pengguna: { contains: namaPengguna } } : {}),
@@ -94,6 +97,7 @@ export async function GET(req) {
           id_location: true,
           id_jabatan: true,
           status_kerja: true,
+          status_cuti: true,
           tanggal_mulai_bekerja: true,
           nomor_rekening: true,
           jenis_bank: true,

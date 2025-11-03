@@ -51,6 +51,15 @@ function parseKouta(value) {
   return num;
 }
 
+function parseCutiTabung(value) {
+  if (value === undefined) return undefined;
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < 0) {
+    throw new Error("Field 'cuti_tabung' harus berupa bilangan bulat >= 0.");
+  }
+  return num;
+}
+
 export async function GET(req, { params }) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -67,6 +76,7 @@ export async function GET(req, { params }) {
         id_user: true,
         bulan: true,
         kouta_cuti: true,
+        cuti_tabung: true,
         created_at: true,
         updated_at: true,
         deleted_at: true,
@@ -138,6 +148,14 @@ export async function PUT(req, { params }) {
       }
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, 'cuti_tabung')) {
+      try {
+        data.cuti_tabung = parseCutiTabung(body.cuti_tabung);
+      } catch (err) {
+        return NextResponse.json({ message: err.message }, { status: 400 });
+      }
+    }
+
     if (Object.keys(data).length === 0) {
       return NextResponse.json({ message: 'Tidak ada perubahan yang dikirim.' }, { status: 400 });
     }
@@ -150,6 +168,7 @@ export async function PUT(req, { params }) {
         id_user: true,
         bulan: true,
         kouta_cuti: true,
+        cuti_tabung: true,
         updated_at: true,
       },
     });

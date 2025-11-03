@@ -162,6 +162,24 @@ function parseTagUserIds(raw) {
   return Array.from(set);
 }
 
+function resolveJenisPengajuan(input, expected) {
+  const fallback = expected;
+  if (input === undefined || input === null) return { ok: true, value: fallback };
+
+  const trimmed = String(input).trim();
+  if (!trimmed) return { ok: true, value: fallback };
+
+  const normalized = trimmed.toLowerCase().replace(/[-\s]+/g, '_');
+  if (normalized !== expected) {
+    return {
+      ok: false,
+      message: `jenis_pengajuan harus bernilai '${expected}'.`,
+    };
+  }
+
+  return { ok: true, value: fallback };
+}
+
 async function validateTaggedUsers(userIds) {
   if (!userIds || !userIds.length) return;
   const uniqueIds = Array.from(new Set(userIds));
@@ -328,6 +346,12 @@ export async function POST(req) {
     const tagUserIds = parseTagUserIds(body.tag_user_ids);
     await validateTaggedUsers(tagUserIds);
 
+    const jenisPengajuanResult = resolveJenisPengajuan(body.jenis_pengajuan, 'izin_jam');
+    if (!jenisPengajuanResult.ok) {
+      return NextResponse.json({ message: jenisPengajuanResult.message }, { status: 400 });
+    }
+    const jenis_pengajuan = jenisPengajuanResult.value;
+
     const targetUser = await db.user.findFirst({
       where: { id_user: targetUserId, deleted_at: null },
       select: { id_user: true },
@@ -349,6 +373,7 @@ export async function POST(req) {
           lampiran_izin_jam_url: lampiran ?? null,
           status: statusRaw,
           current_level: currentLevel,
+          jenis_pengajuan,
         },
       });
 

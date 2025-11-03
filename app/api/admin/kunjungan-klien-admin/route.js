@@ -192,6 +192,27 @@ export async function POST(req) {
 
     const targetUserId = id_user && canManageAll(auth.actor?.role) ? String(id_user) : auth.actor.id;
 
+    // Snapshot pembuat (admin/operator yang membuat entri kunjungan)
+    let created_by_snapshot = null;
+    try {
+      const actorId = auth?.actor?.id ? String(auth.actor.id).trim() : '';
+      if (actorId) {
+        const creator = await db.user.findUnique({
+          where: { id_user: actorId },
+          select: { nama_pengguna: true, email: true, role: true },
+        });
+        const label = creator?.nama_pengguna || creator?.email || actorId;
+        const role = creator?.role || auth?.actor?.role || '';
+        created_by_snapshot = [label, role ? `(${String(role)})` : null]
+          .filter(Boolean)
+          .join(' ')
+          .slice(0, 255);
+      }
+    } catch (_) {
+      // biarkan null jika gagal mengambil snapshot
+      created_by_snapshot = null;
+    }
+
     const created = await db.kunjungan.create({
       data: {
         id_user: targetUserId,
@@ -202,6 +223,7 @@ export async function POST(req) {
         jam_mulai: jm,
         jam_selesai: js,
         status_kunjungan: 'diproses',
+        created_by_snapshot,
       },
       include: kunjunganInclude,
     });

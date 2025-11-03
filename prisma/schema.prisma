@@ -59,6 +59,12 @@ enum JenisKelamin {
   PEREMPUAN
 }
 
+// BARU: Status Cuti User
+enum StatusCuti {
+  aktif
+  nonaktif
+}
+
 enum ShiftStatus {
   KERJA
   LIBUR
@@ -144,7 +150,8 @@ model Broadcast {
   updated_at    DateTime  @updatedAt @db.DateTime(0)
   deleted_at    DateTime? @db.DateTime(0)
 
-  recipients BroadcastRecipient[]
+  recipients  BroadcastRecipient[]
+  attachments BroadcastAttachment[]
 
   @@map("broadcasts")
 }
@@ -164,6 +171,22 @@ model BroadcastRecipient {
   @@index([id_broadcast])
   @@index([id_user])
   @@map("broadcasts_recipients")
+}
+
+model BroadcastAttachment {
+  id_broadcast_attachment String @id @default(uuid()) @db.Char(36)
+  id_broadcast            String @db.Char(36)
+  lampiran_url            String @db.LongText // URL ke file lampiran
+
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @updatedAt @db.DateTime(0)
+  deleted_at DateTime? @db.DateTime(0)
+
+  // Relasi kembali ke Broadcast
+  broadcast Broadcast @relation(fields: [id_broadcast], references: [id_broadcasts], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([id_broadcast])
+  @@map("broadcast_attachments")
 }
 
 model PolaKerja {
@@ -217,16 +240,17 @@ model Agenda {
 }
 
 model AgendaKerja {
-  id_agenda_kerja  String       @id @default(uuid()) @db.Char(36)
-  id_absensi       String?      @db.Char(36)
-  id_agenda        String       @db.Char(36)
-  id_user          String       @db.Char(36)
-  deskripsi_kerja  String       @db.LongText
-  start_date       DateTime?    @db.DateTime(0)
-  end_date         DateTime?    @db.DateTime(0)
-  duration_seconds Int?
-  status           AgendaStatus
-  kebutuhan_agenda String?      @db.VarChar(255)
+  id_agenda_kerja     String       @id @default(uuid()) @db.Char(36)
+  id_absensi          String?      @db.Char(36)
+  id_agenda           String       @db.Char(36)
+  id_user             String       @db.Char(36)
+  deskripsi_kerja     String       @db.LongText
+  start_date          DateTime?    @db.DateTime(0)
+  end_date            DateTime?    @db.DateTime(0)
+  duration_seconds    Int?
+  status              AgendaStatus
+  kebutuhan_agenda    String?      @db.VarChar(255)
+  created_by_snapshot String?      @db.VarChar(255)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -243,8 +267,8 @@ model AgendaKerja {
 }
 
 model KategoriKunjungan {
-  id_kategori_kunjungan String    @id @default(uuid()) @db.Char(36)
-  kategori_kunjungan    String    @unique @db.VarChar(191)
+  id_kategori_kunjungan String @id @default(uuid()) @db.Char(36)
+  kategori_kunjungan    String @unique @db.VarChar(191)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -256,30 +280,31 @@ model KategoriKunjungan {
 }
 
 model Kunjungan {
-  id_kunjungan             String    @id @default(uuid()) @db.Char(36)
-  id_user                  String    @db.Char(36)
-  id_kategori_kunjungan    String?   @db.Char(36)
-  tanggal                  DateTime? @db.Date
-  jam_mulai                DateTime? @db.DateTime(0)
-  jam_selesai              DateTime? @db.DateTime(0)
-  deskripsi                String?   @db.LongText
-  jam_checkin              DateTime? @db.DateTime(0)
-  jam_checkout             DateTime? @db.DateTime(0)
-  start_latitude           Decimal?  @db.Decimal(10, 6)
-  start_longitude          Decimal?  @db.Decimal(10, 6)
-  end_latitude             Decimal?  @db.Decimal(10, 6)
-  end_longitude            Decimal?  @db.Decimal(10, 6)
-  lampiran_kunjungan_url   String?   @db.LongText
-  status_kunjungan         StatusKunjungan @default(diproses)
-  duration                 Int?
-  hand_over                String?   @db.LongText
+  id_kunjungan           String          @id @default(uuid()) @db.Char(36)
+  id_user                String          @db.Char(36)
+  id_kategori_kunjungan  String?         @db.Char(36)
+  tanggal                DateTime?       @db.Date
+  jam_mulai              DateTime?       @db.DateTime(0)
+  jam_selesai            DateTime?       @db.DateTime(0)
+  deskripsi              String?         @db.LongText
+  jam_checkin            DateTime?       @db.DateTime(0)
+  jam_checkout           DateTime?       @db.DateTime(0)
+  start_latitude         Decimal?        @db.Decimal(10, 6)
+  start_longitude        Decimal?        @db.Decimal(10, 6)
+  end_latitude           Decimal?        @db.Decimal(10, 6)
+  end_longitude          Decimal?        @db.Decimal(10, 6)
+  lampiran_kunjungan_url String?         @db.LongText
+  status_kunjungan       StatusKunjungan @default(diproses)
+  duration               Int?
+  hand_over              String?         @db.LongText
+  created_by_snapshot    String?         @db.VarChar(255)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
   deleted_at DateTime? @db.DateTime(0)
 
-  user     User               @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
-  kategori KategoriKunjungan? @relation(fields: [id_kategori_kunjungan], references: [id_kategori_kunjungan], onDelete: SetNull, onUpdate: Cascade)
+  user     User                       @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  kategori KategoriKunjungan?         @relation(fields: [id_kategori_kunjungan], references: [id_kategori_kunjungan], onDelete: SetNull, onUpdate: Cascade)
   reports  KunjunganReportRecipient[]
 
   @@index([id_user, tanggal])
@@ -288,16 +313,16 @@ model Kunjungan {
 }
 
 model KunjunganReportRecipient {
-  id_kunjungan_report_recipient String    @id @default(uuid()) @db.Char(36)
-  id_kunjungan                  String    @db.Char(36)
-  id_user                       String    @db.Char(36)
-  recipient_nama_snapshot       String    @db.VarChar(255)
+  id_kunjungan_report_recipient String       @id @default(uuid()) @db.Char(36)
+  id_kunjungan                  String       @db.Char(36)
+  id_user                       String       @db.Char(36)
+  recipient_nama_snapshot       String       @db.VarChar(255)
   recipient_role_snapshot       AtasanRole?
-  catatan                       String?   @db.LongText
+  catatan                       String?      @db.LongText
   status                        ReportStatus @default(terkirim)
-  notified_at                   DateTime? @db.DateTime(0)
-  read_at                       DateTime? @db.DateTime(0)
-  acted_at                      DateTime? @db.DateTime(0)
+  notified_at                   DateTime?    @db.DateTime(0)
+  read_at                       DateTime?    @db.DateTime(0)
+  acted_at                      DateTime?    @db.DateTime(0)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -313,44 +338,45 @@ model KunjunganReportRecipient {
 }
 
 model User {
-  id_user                      String    @id @default(uuid()) @db.Char(36)
-  nama_pengguna                String    @db.VarChar(255)
-  email                        String    @unique @db.VarChar(255)
-  password_hash                String    @db.VarChar(255)
-  kontak                       String?   @db.VarChar(32)
-  kontak_darurat               String?   @db.VarChar(32)
-  password_updated_at          DateTime? @db.DateTime(0)
-  agama                        String?   @db.VarChar(32)
-  foto_profil_user             String?   @db.LongText
-  tanggal_lahir                DateTime? @db.Date
-  role                         Role
-  id_departement               String?   @db.Char(36)
-  id_location                  String?   @db.Char(36)
-  reset_password_token         String?   @db.VarChar(255)
-  reset_password_expires_at    DateTime? @db.DateTime(0)
-  tempat_lahir                 String?   @db.VarChar(255)
-  jenis_kelamin                JenisKelamin?
-  golongan_darah               String?   @db.VarChar(5)
-  status_perkawinan            String?   @db.VarChar(50)
-  alamat_ktp                   String?   @db.LongText
-  alamat_ktp_provinsi          String?   @db.VarChar(255)
-  alamat_ktp_kota              String?   @db.VarChar(255)
-  alamat_domisili              String?   @db.LongText
-  alamat_domisili_provinsi     String?   @db.VarChar(255)
-  alamat_domisili_kota         String?   @db.VarChar(255)
-  zona_waktu                   String?   @db.VarChar(50)
-  jenjang_pendidikan           String?   @db.VarChar(50)
-  jurusan                      String?   @db.VarChar(100)
-  nama_institusi_pendidikan    String?   @db.VarChar(255)
-  tahun_lulus                  Int?
-  nomor_induk_karyawan         String?   @unique @db.VarChar(100)
-  divisi                       String?   @db.VarChar(100)
-  id_jabatan                   String?   @db.Char(36)
-  status_kerja                 StatusKerja?
-  tanggal_mulai_bekerja        DateTime? @db.Date
-  nomor_rekening               String?   @db.VarChar(50)
-  jenis_bank                   String?   @db.VarChar(50)
-  catatan_delete               String?   @db.LongText
+  id_user                   String        @id @default(uuid()) @db.Char(36)
+  nama_pengguna             String        @db.VarChar(255)
+  email                     String        @unique @db.VarChar(255)
+  password_hash             String        @db.VarChar(255)
+  kontak                    String?       @db.VarChar(32)
+  kontak_darurat            String?       @db.VarChar(32)
+  password_updated_at       DateTime?     @db.DateTime(0)
+  agama                     String?       @db.VarChar(32)
+  foto_profil_user          String?       @db.LongText
+  tanggal_lahir             DateTime?     @db.Date
+  role                      Role
+  id_departement            String?       @db.Char(36)
+  id_location               String?       @db.Char(36)
+  reset_password_token      String?       @db.VarChar(255)
+  reset_password_expires_at DateTime?     @db.DateTime(0)
+  tempat_lahir              String?       @db.VarChar(255)
+  jenis_kelamin             JenisKelamin?
+  golongan_darah            String?       @db.VarChar(5)
+  status_perkawinan         String?       @db.VarChar(50)
+  alamat_ktp                String?       @db.LongText
+  alamat_ktp_provinsi       String?       @db.VarChar(255)
+  alamat_ktp_kota           String?       @db.VarChar(255)
+  alamat_domisili           String?       @db.LongText
+  alamat_domisili_provinsi  String?       @db.VarChar(255)
+  alamat_domisili_kota      String?       @db.VarChar(255)
+  zona_waktu                String?       @db.VarChar(50)
+  jenjang_pendidikan        String?       @db.VarChar(50)
+  jurusan                   String?       @db.VarChar(100)
+  nama_institusi_pendidikan String?       @db.VarChar(255)
+  tahun_lulus               Int?
+  nomor_induk_karyawan      String?       @unique @db.VarChar(100)
+  divisi                    String?       @db.VarChar(100)
+  id_jabatan                String?       @db.Char(36)
+  status_kerja              StatusKerja?
+  status_cuti               StatusCuti    @default(aktif)
+  tanggal_mulai_bekerja     DateTime?     @db.Date
+  nomor_rekening            String?       @db.VarChar(50)
+  jenis_bank                String?       @db.VarChar(50)
+  catatan_delete            String?       @db.LongText
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -413,7 +439,7 @@ model Departement {
 
   users        User[]
   jabatan      Jabatan[]
-  supervisor   User?        @relation("SupervisorForDepartment", fields: [id_supervisor], references: [id_user], onDelete: SetNull, onUpdate: Cascade)
+  supervisor   User?          @relation("SupervisorForDepartment", fields: [id_supervisor], references: [id_user], onDelete: SetNull, onUpdate: Cascade)
   StoryPlanner StoryPlanner[]
 
   @@map("departement")
@@ -525,24 +551,24 @@ model Device {
 }
 
 model Absensi {
-  id_absensi            String    @id @default(uuid()) @db.Char(36)
-  id_user               String    @db.Char(36)
-  face_verified_masuk   Boolean
-  face_verified_pulang  Boolean
-  tanggal               DateTime? @db.Date
-  id_lokasi_pulang      String?   @db.Char(36)
-  id_lokasi_datang      String?   @db.Char(36)
-  jam_masuk             DateTime? @db.DateTime(0)
-  jam_pulang            DateTime? @db.DateTime(0)
-  status_masuk          AbsensiStatus?
-  status_pulang         AbsensiStatus?
-  in_latitude           Decimal?  @db.Decimal(10, 6)
-  in_longitude          Decimal?  @db.Decimal(10, 6)
-  out_latitude          Decimal?  @db.Decimal(10, 6)
-  out_longitude         Decimal?  @db.Decimal(10, 6)
-  created_at            DateTime  @default(now()) @db.DateTime(0)
-  updated_at            DateTime  @updatedAt @db.DateTime(0)
-  deleted_at            DateTime? @db.DateTime(0)
+  id_absensi           String         @id @default(uuid()) @db.Char(36)
+  id_user              String         @db.Char(36)
+  face_verified_masuk  Boolean
+  face_verified_pulang Boolean
+  tanggal              DateTime?      @db.Date
+  id_lokasi_pulang     String?        @db.Char(36)
+  id_lokasi_datang     String?        @db.Char(36)
+  jam_masuk            DateTime?      @db.DateTime(0)
+  jam_pulang           DateTime?      @db.DateTime(0)
+  status_masuk         AbsensiStatus?
+  status_pulang        AbsensiStatus?
+  in_latitude          Decimal?       @db.Decimal(10, 6)
+  in_longitude         Decimal?       @db.Decimal(10, 6)
+  out_latitude         Decimal?       @db.Decimal(10, 6)
+  out_longitude        Decimal?       @db.Decimal(10, 6)
+  created_at           DateTime       @default(now()) @db.DateTime(0)
+  updated_at           DateTime       @updatedAt @db.DateTime(0)
+  deleted_at           DateTime?      @db.DateTime(0)
 
   user              User                     @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
   lokasiIn          Location?                @relation("absen_datang", fields: [id_lokasi_datang], references: [id_location], onDelete: SetNull, onUpdate: Cascade)
@@ -560,16 +586,16 @@ model Absensi {
 }
 
 model AbsensiReportRecipient {
-  id_absensi_report_recipient String    @id @default(uuid()) @db.Char(36)
-  id_absensi                  String    @db.Char(36)
-  id_user                     String    @db.Char(36)
-  recipient_nama_snapshot     String    @db.VarChar(255)
+  id_absensi_report_recipient String       @id @default(uuid()) @db.Char(36)
+  id_absensi                  String       @db.Char(36)
+  id_user                     String       @db.Char(36)
+  recipient_nama_snapshot     String       @db.VarChar(255)
   recipient_role_snapshot     AtasanRole?
-  catatan                     String?   @db.LongText
+  catatan                     String?      @db.LongText
   status                      ReportStatus @default(terkirim)
-  notified_at                 DateTime? @db.DateTime(0)
-  read_at                     DateTime? @db.DateTime(0)
-  acted_at                    DateTime? @db.DateTime(0)
+  notified_at                 DateTime?    @db.DateTime(0)
+  read_at                     DateTime?    @db.DateTime(0)
+  acted_at                    DateTime?    @db.DateTime(0)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -628,7 +654,7 @@ model NotificationTemplate {
   eventTrigger  String   @unique @map("event_trigger")
   description   String
   titleTemplate String   @map("title_template")
-  bodyTemplate  String   @db.Text @map("body_template")
+  bodyTemplate  String   @map("body_template") @db.Text
   placeholders  String?
   isActive      Boolean  @default(true) @map("is_active")
   createdAt     DateTime @default(now()) @map("created_at")
@@ -714,21 +740,22 @@ model ShiftStoryPlanner {
 }
 
 model KategoriSakit {
-  id_kategori_sakit String    @id @default(uuid()) @db.Char(36)
-  nama_kategori     String    @db.VarChar(255)
-  created_at        DateTime  @default(now()) @db.DateTime(0)
-  updated_at        DateTime  @updatedAt @db.DateTime(0)
-  deleted_at        DateTime? @db.DateTime(0)
+  id_kategori_sakit String               @id @default(uuid()) @db.Char(36)
+  nama_kategori     String               @db.VarChar(255)
+  created_at        DateTime             @default(now()) @db.DateTime(0)
+  updated_at        DateTime             @updatedAt @db.DateTime(0)
+  deleted_at        DateTime?            @db.DateTime(0)
   sakit             PengajuanIzinSakit[]
 
   @@map("kategori_sakit")
 }
 
 model CutiKonfigurasi {
-  id_cuti_konfigurasi String    @id @default(uuid()) @db.Char(36)
-  id_user             String    @db.Char(36)
+  id_cuti_konfigurasi String @id @default(uuid()) @db.Char(36)
+  id_user             String @db.Char(36)
   bulan               Bulan
   kouta_cuti          Int
+  cuti_tabung         Int
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -754,25 +781,25 @@ model KategoriCuti {
 }
 
 model PengajuanCuti {
-  id_pengajuan_cuti   String    @id @default(uuid()) @db.Char(36)
-  id_user             String    @db.Char(36)
-  id_kategori_cuti    String    @db.Char(36)
-  keperluan           String?   @db.LongText
-  tanggal_mulai       DateTime  @db.Date
-  tanggal_masuk_kerja DateTime  @db.Date
-  handover            String?   @db.LongText
+  id_pengajuan_cuti   String        @id @default(uuid()) @db.Char(36)
+  id_user             String        @db.Char(36)
+  id_kategori_cuti    String        @db.Char(36)
+  keperluan           String?       @db.LongText
+  tanggal_mulai       DateTime      @db.Date
+  tanggal_masuk_kerja DateTime      @db.Date
+  handover            String?       @db.LongText
   status              ApproveStatus @default(pending)
   current_level       Int?
-  jenis_pengajuan     String    @db.VarChar(32) 
+  jenis_pengajuan     String        @db.VarChar(32)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
   deleted_at DateTime? @db.DateTime(0)
 
-  user            User                    @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
-  kategori_cuti   KategoriCuti            @relation(fields: [id_kategori_cuti], references: [id_kategori_cuti], onDelete: Restrict, onUpdate: Cascade)
-  approvals       ApprovalPengajuanCuti[]
-  handover_users  HandoverCuti[]
+  user           User                    @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  kategori_cuti  KategoriCuti            @relation(fields: [id_kategori_cuti], references: [id_kategori_cuti], onDelete: Restrict, onUpdate: Cascade)
+  approvals      ApprovalPengajuanCuti[]
+  handover_users HandoverCuti[]
 
   @@index([id_user])
   @@index([id_kategori_cuti])
@@ -802,14 +829,14 @@ model ApprovalPengajuanCuti {
 }
 
 model PengajuanIzinSakit {
-  id_pengajuan_izin_sakit String    @id @default(uuid()) @db.Char(36)
-  id_user                 String    @db.Char(36)
-  id_kategori_sakit       String    @db.Char(36)
-  handover                String?   @db.LongText
-  lampiran_izin_sakit_url String?   @db.LongText
+  id_pengajuan_izin_sakit String        @id @default(uuid()) @db.Char(36)
+  id_user                 String        @db.Char(36)
+  id_kategori_sakit       String        @db.Char(36)
+  handover                String?       @db.LongText
+  lampiran_izin_sakit_url String?       @db.LongText
   status                  ApproveStatus @default(pending)
   current_level           Int?
-  jenis_pengajuan         String    @db.VarChar(32)
+  jenis_pengajuan         String        @db.VarChar(32)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -826,14 +853,14 @@ model PengajuanIzinSakit {
 }
 
 model ApprovalIzinSakit {
-  id_approval_izin_sakit    String    @id @default(uuid()) @db.Char(36)
-  id_pengajuan_izin_sakit   String    @db.Char(36)
-  level                     Int
-  approver_user_id          String?   @db.Char(36)
-  approver_role             Role?
-  decision                  ApproveStatus @default(pending)
-  decided_at                DateTime? @db.DateTime(0)
-  note                      String?   @db.LongText
+  id_approval_izin_sakit  String        @id @default(uuid()) @db.Char(36)
+  id_pengajuan_izin_sakit String        @db.Char(36)
+  level                   Int
+  approver_user_id        String?       @db.Char(36)
+  approver_role           Role?
+  decision                ApproveStatus @default(pending)
+  decided_at              DateTime?     @db.DateTime(0)
+  note                    String?       @db.LongText
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -848,18 +875,18 @@ model ApprovalIzinSakit {
 }
 
 model PengajuanIzinJam {
-  id_pengajuan_izin_jam   String    @id @default(uuid()) @db.Char(36)
-  id_user                 String    @db.Char(36)
-  tanggal_izin            DateTime  @db.Date
-  jam_mulai               DateTime  @db.DateTime(0)
-  jam_selesai             DateTime  @db.DateTime(0)
-  kategori                String    @db.VarChar(255)
-  keperluan               String?   @db.LongText
-  handover                String?   @db.LongText
-  lampiran_izin_jam_url   String?   @db.LongText
-  status                  ApproveStatus @default(pending)
-  current_level           Int?
-  jenis_pengajuan         String    @db.VarChar(32)
+  id_pengajuan_izin_jam String        @id @default(uuid()) @db.Char(36)
+  id_user               String        @db.Char(36)
+  tanggal_izin          DateTime      @db.Date
+  jam_mulai             DateTime      @db.DateTime(0)
+  jam_selesai           DateTime      @db.DateTime(0)
+  kategori              String        @db.VarChar(255)
+  keperluan             String?       @db.LongText
+  handover              String?       @db.LongText
+  lampiran_izin_jam_url String?       @db.LongText
+  status                ApproveStatus @default(pending)
+  current_level         Int?
+  jenis_pengajuan       String        @db.VarChar(32)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
@@ -888,7 +915,7 @@ model ApprovalPengajuanIzinJam {
   deleted_at DateTime? @db.DateTime(0)
 
   pengajuan_izin_jam PengajuanIzinJam @relation(fields: [id_pengajuan_izin_jam], references: [id_pengajuan_izin_jam], onDelete: Cascade, onUpdate: Cascade)
-  approver           User?             @relation("ApprovalIzinJam_approver", fields: [approver_user_id], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  approver           User?            @relation("ApprovalIzinJam_approver", fields: [approver_user_id], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([id_pengajuan_izin_jam, level])
   @@index([approver_user_id])
@@ -896,16 +923,16 @@ model ApprovalPengajuanIzinJam {
 }
 
 model IzinTukarHari {
-  id_izin_tukar_hari String    @id @default(uuid()) @db.Char(36)
-  id_user            String    @db.Char(36)
-  hari_izin          DateTime  @db.Date
-  hari_pengganti     DateTime  @db.Date
-  kategori           String    @db.VarChar(255)
-  keperluan          String?   @db.LongText
-  handover           String?   @db.LongText
+  id_izin_tukar_hari String        @id @default(uuid()) @db.Char(36)
+  id_user            String        @db.Char(36)
+  hari_izin          DateTime      @db.Date
+  hari_pengganti     DateTime      @db.Date
+  kategori           String        @db.VarChar(255)
+  keperluan          String?       @db.LongText
+  handover           String?       @db.LongText
   status             ApproveStatus @default(pending)
   current_level      Int?
-  jenis_pengajuan    String    @db.VarChar(32) 
+  jenis_pengajuan    String        @db.VarChar(32)
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)

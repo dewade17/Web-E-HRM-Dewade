@@ -10,15 +10,15 @@ async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
     try {
-      verifyAuthToken(auth.slice(7));
-      return true;
+      const payload = verifyAuthToken(auth.slice(7));
+      return { actor: { id: payload?.sub || payload?.id_user || payload?.userId, role: payload?.role, source: 'bearer' } };
     } catch {
       /* fallback ke NextAuth */
     }
   }
   const sessionOrRes = await authenticateRequest();
   if (sessionOrRes instanceof NextResponse) return sessionOrRes; // unauthorized
-  return true;
+  return { actor: { id: sessionOrRes?.user?.id || sessionOrRes?.user?.id_user, role: sessionOrRes?.user?.role, source: 'session' } };
 }
 
 function toDateOrNull(v) {
@@ -70,8 +70,8 @@ const MIN_RANGE_DATE = startOfUTCDay('1970-01-01') ?? new Date(Date.UTC(1970, 0,
 const MAX_RANGE_DATE = endOfUTCDay('2999-12-31') ?? new Date(Date.UTC(2999, 11, 31, 23, 59, 59, 999));
 
 export async function GET(request) {
-  const okAuth = await ensureAuth(request);
-  if (okAuth instanceof NextResponse) return okAuth;
+  const auth = await ensureAuth(request);
+  if (auth instanceof NextResponse) return auth;
 
   try {
     const { searchParams } = new URL(request.url);
@@ -141,8 +141,8 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  const okAuth = await ensureAuth(request);
-  if (okAuth instanceof NextResponse) return okAuth;
+  const auth = await ensureAuth(request);
+  if (auth instanceof NextResponse) return auth;
 
   try {
     const body = await request.json();
@@ -198,6 +198,26 @@ export async function POST(request) {
       return NextResponse.json({ ok: false, message: kebutuhanAgenda.error }, { status: 400 });
     }
 
+    // Snapshot pembuat (umumnya user mobile itu sendiri)
+    let created_by_snapshot = null;
+    try {
+      const actorId = auth?.actor?.id ? String(auth.actor.id).trim() : '';
+      if (actorId) {
+        const creator = await db.user.findUnique({
+          where: { id_user: actorId },
+          select: { nama_pengguna: true, email: true, role: true },
+        });
+        const label = creator?.nama_pengguna || creator?.email || actorId;
+        const role = creator?.role || auth?.actor?.role || '';
+        created_by_snapshot = [label, role ? `(${String(role)})` : null]
+          .filter(Boolean)
+          .join(' ')
+          .slice(0, 255);
+      }
+    } catch (e) {
+      created_by_snapshot = null;
+    }
+
     const data = {
       id_user,
       id_agenda,
@@ -207,6 +227,7 @@ export async function POST(request) {
       end_date,
       duration_seconds,
       id_absensi: body.id_absensi ?? null,
+      created_by_snapshot,
       ...(kebutuhanAgenda.value !== undefined && { kebutuhan_agenda: kebutuhanAgenda.value }),
     };
 

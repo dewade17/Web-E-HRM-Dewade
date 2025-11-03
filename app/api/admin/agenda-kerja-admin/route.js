@@ -236,6 +236,27 @@ export async function POST(request) {
       duration_seconds = Math.max(0, Math.floor((end_date - start_date) / 1000));
     }
 
+    // Snapshot pembuat (admin/operator yang sedang login)
+    let created_by_snapshot = null;
+    try {
+      const actorId = auth?.actor?.id ? String(auth.actor.id).trim() : '';
+      if (actorId) {
+        const creator = await db.user.findUnique({
+          where: { id_user: actorId },
+          select: { nama_pengguna: true, email: true, role: true },
+        });
+        const label = creator?.nama_pengguna || creator?.email || actorId;
+        const role = creator?.role || auth?.actor?.role || '';
+        created_by_snapshot = [label, role ? `(${String(role)})` : null]
+          .filter(Boolean)
+          .join(' ')
+          .slice(0, 255);
+      }
+    } catch (e) {
+      // fallback: biarkan null jika gagal mengambil snapshot
+      created_by_snapshot = null;
+    }
+
     const data = {
       id_user,
       id_agenda,
@@ -245,6 +266,7 @@ export async function POST(request) {
       end_date,
       duration_seconds,
       id_absensi: body.id_absensi ?? null,
+      created_by_snapshot,
     };
 
     const created = await db.agendaKerja.create({

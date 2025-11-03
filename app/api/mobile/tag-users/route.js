@@ -19,7 +19,7 @@ async function ensureAuth(req) {
   return true;
 }
 
-// GET /api/mobile/tag-karyawan
+// GET /api/mobile/tag-users
 // Query: q?=keyword, page?=1.., pageSize?=10..
 export async function GET(req) {
   const ok = await ensureAuth(req);
@@ -35,11 +35,7 @@ export async function GET(req) {
       deleted_at: null,
       ...(q
         ? {
-            OR: [
-              { nama_pengguna: { contains: q, mode: 'insensitive' } },
-              { email: { contains: q, mode: 'insensitive' } },
-              { kontak: { contains: q, mode: 'insensitive' } },
-            ],
+            OR: [{ nama_pengguna: { contains: q } }, { email: { contains: q } }, { kontak: { contains: q } }],
           }
         : {}),
     };
@@ -57,6 +53,9 @@ export async function GET(req) {
           email: true,
           kontak: true,
           foto_profil_user: true,
+          divisi: true,
+          id_departement: true,
+          departement: { select: { id_departement: true, nama_departement: true } },
           role: true,
         },
       }),
@@ -72,7 +71,7 @@ export async function GET(req) {
       },
     });
   } catch (err) {
-    console.error('GET /mobile/tag-karyawan error:', err);
+    console.error('GET /mobile/tag-users error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }

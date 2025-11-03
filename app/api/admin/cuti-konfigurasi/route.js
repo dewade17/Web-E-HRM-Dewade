@@ -44,7 +44,7 @@ function guardHr(actor) {
   return null;
 }
 
-const ALLOWED_ORDER_BY = new Set(['created_at', 'updated_at', 'bulan', 'kouta_cuti', 'user']);
+const ALLOWED_ORDER_BY = new Set(['created_at', 'updated_at', 'bulan', 'kouta_cuti', 'cuti_tabung', 'user']);
 
 export async function GET(req) {
   const auth = await ensureAuth(req);
@@ -98,6 +98,7 @@ export async function GET(req) {
           id_user: true,
           bulan: true,
           kouta_cuti: true,
+          cuti_tabung: true,
           created_at: true,
           updated_at: true,
           deleted_at: true,
@@ -141,6 +142,7 @@ export async function POST(req) {
     const idUser = body?.id_user ? String(body.id_user).trim() : '';
     const bulanInput = body?.bulan ? String(body.bulan).trim().toUpperCase() : '';
     const koutaRaw = body?.kouta_cuti;
+    const cutiTabungRaw = body?.cuti_tabung;
 
     if (!idUser) {
       return NextResponse.json({ message: "Field 'id_user' wajib diisi." }, { status: 400 });
@@ -164,17 +166,25 @@ export async function POST(req) {
       return NextResponse.json({ message: 'User tidak ditemukan.' }, { status: 404 });
     }
 
+    // Validate and normalize numeric fields
+    const cutiTabung = cutiTabungRaw === undefined || cutiTabungRaw === null ? 0 : Number(cutiTabungRaw);
+    if (!Number.isInteger(cutiTabung) || cutiTabung < 0) {
+      return NextResponse.json({ message: "Field 'cuti_tabung' harus berupa bilangan bulat >= 0." }, { status: 400 });
+    }
+
     const created = await db.cutiKonfigurasi.create({
       data: {
         id_user: idUser,
         bulan: bulanInput,
         kouta_cuti: kouta,
+        cuti_tabung: cutiTabung,
       },
       select: {
         id_cuti_konfigurasi: true,
         id_user: true,
         bulan: true,
         kouta_cuti: true,
+        cuti_tabung: true,
         created_at: true,
       },
     });

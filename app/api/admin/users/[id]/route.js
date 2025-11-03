@@ -20,6 +20,7 @@ const normRole = (r) => String(r || '').trim().toUpperCase();
 const VIEW_ROLES = new Set(['HR', 'DIREKTUR', 'SUPERADMIN']);
 const EDIT_ROLES = new Set(['HR', 'DIREKTUR', 'SUPERADMIN']);
 const DELETE_ROLES = new Set(['HR', 'DIREKTUR', 'SUPERADMIN']);
+const STATUS_CUTI_VALUES = new Set(['aktif', 'nonaktif']);
 
 // ===== Helpers: Auth (Admin) =====
 async function getAdminActor(req) {
@@ -151,6 +152,7 @@ export async function GET(_req, { params }) {
         id_location: true,
         id_jabatan: true,
         status_kerja: true,
+        status_cuti: true,
         tanggal_mulai_bekerja: true,
         nomor_rekening: true,
         jenis_bank: true,
@@ -216,6 +218,15 @@ export async function PUT(req, { params }) {
       return NextResponse.json({ message: statusKerjaError }, { status: 400 });
     }
 
+    let statusCutiValue;
+    if (body.status_cuti !== undefined) {
+      const normalized = String(body.status_cuti).trim().toLowerCase();
+      if (!STATUS_CUTI_VALUES.has(normalized)) {
+        return NextResponse.json({ message: "Field 'status_cuti' harus salah satu dari: aktif, nonaktif." }, { status: 400 });
+      }
+      statusCutiValue = normalized;
+    }
+
     const tempatLahir = normalizeNullableString(body.tempat_lahir);
     const golonganDarah = normalizeNullableString(body.golongan_darah);
     const statusPerkawinan = normalizeNullableString(body.status_perkawinan);
@@ -276,6 +287,7 @@ export async function PUT(req, { params }) {
       ...(locationId.value !== undefined && { id_location: locationId.value }),
       ...(jabatanId.value !== undefined && { id_jabatan: jabatanId.value }),
       ...(statusKerjaValue !== undefined && { status_kerja: statusKerjaValue }),
+      ...(statusCutiValue !== undefined && { status_cuti: statusCutiValue }),
       ...(tanggalMulaiValue !== undefined && { tanggal_mulai_bekerja: tanggalMulaiValue }),
       ...(nomorRekening.value !== undefined && { nomor_rekening: nomorRekening.value }),
       ...(jenisBank.value !== undefined && { jenis_bank: jenisBank.value }),
@@ -346,6 +358,7 @@ export async function PUT(req, { params }) {
         id_location: true,
         id_jabatan: true,
         status_kerja: true,
+        status_cuti: true,
         tanggal_mulai_bekerja: true,
         nomor_rekening: true,
         jenis_bank: true,
