@@ -197,6 +197,8 @@ export async function PUT(req, { params }) {
 
     let jamMulai = pengajuan.jam_mulai;
     let jamSelesai = pengajuan.jam_selesai;
+    let jamMulaiPengganti = pengajuan.jam_mulai_pengganti;
+    let jamSelesaiPengganti = pengajuan.jam_selesai_pengganti;
 
     if (Object.prototype.hasOwnProperty.call(body, 'jam_mulai')) {
       const parsed = parseDateTimeToUTC(body.jam_mulai);
@@ -218,6 +220,49 @@ export async function PUT(req, { params }) {
 
     if (jamMulai && jamSelesai && jamSelesai <= jamMulai) {
       return NextResponse.json({ message: 'jam_selesai harus lebih besar dari jam_mulai.' }, { status: 400 });
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'tanggal_pengganti')) {
+      if (isNullLike(body.tanggal_pengganti)) {
+        data.tanggal_pengganti = null;
+      } else {
+        const parsed = parseDateOnlyToUTC(body.tanggal_pengganti);
+        if (!parsed) {
+          return NextResponse.json({ message: "Field 'tanggal_pengganti' harus berupa tanggal yang valid." }, { status: 400 });
+        }
+        data.tanggal_pengganti = parsed;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, 'jam_mulai_pengganti')) {
+      if (isNullLike(body.jam_mulai_pengganti)) {
+        data.jam_mulai_pengganti = null;
+        jamMulaiPengganti = null;
+      } else {
+        const parsed = parseDateTimeToUTC(body.jam_mulai_pengganti);
+        if (!parsed) {
+          return NextResponse.json({ message: "Field 'jam_mulai_pengganti' harus berupa waktu yang valid." }, { status: 400 });
+        }
+        data.jam_mulai_pengganti = parsed;
+        jamMulaiPengganti = parsed;
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, 'jam_selesai_pengganti')) {
+      if (isNullLike(body.jam_selesai_pengganti)) {
+        data.jam_selesai_pengganti = null;
+        jamSelesaiPengganti = null;
+      } else {
+        const parsed = parseDateTimeToUTC(body.jam_selesai_pengganti);
+        if (!parsed) {
+          return NextResponse.json({ message: "Field 'jam_selesai_pengganti' harus berupa waktu yang valid." }, { status: 400 });
+        }
+        data.jam_selesai_pengganti = parsed;
+        jamSelesaiPengganti = parsed;
+      }
+    }
+
+    if (jamMulaiPengganti && jamSelesaiPengganti && jamSelesaiPengganti <= jamMulaiPengganti) {
+      return NextResponse.json({ message: 'jam_selesai_pengganti harus lebih besar dari jam_mulai_pengganti.' }, { status: 400 });
     }
 
     if (Object.prototype.hasOwnProperty.call(body, 'id_kategori_izin_jam')) {

@@ -351,6 +351,43 @@ export async function POST(req) {
     const keperluan = isNullLike(body.keperluan) ? null : String(body.keperluan).trim();
     const handover = isNullLike(body.handover) ? null : String(body.handover).trim();
     const lampiran = normalizeLampiranInput(body.lampiran_izin_jam_url ?? body.lampiran_url ?? body.lampiran);
+    let tanggalPengganti = null;
+    if (Object.prototype.hasOwnProperty.call(body, 'tanggal_pengganti')) {
+      if (!isNullLike(body.tanggal_pengganti)) {
+        const parsedTanggalPengganti = parseDateOnlyToUTC(body.tanggal_pengganti);
+        if (!parsedTanggalPengganti) {
+          return NextResponse.json({ message: "Field 'tanggal_pengganti' harus berupa tanggal yang valid ketika diisi." }, { status: 400 });
+        }
+        tanggalPengganti = parsedTanggalPengganti;
+      }
+    }
+
+    let jamMulaiPengganti = null;
+    if (Object.prototype.hasOwnProperty.call(body, 'jam_mulai_pengganti')) {
+      if (!isNullLike(body.jam_mulai_pengganti)) {
+        const parsedJamMulaiPengganti = parseDateTimeToUTC(body.jam_mulai_pengganti);
+        if (!parsedJamMulaiPengganti) {
+          return NextResponse.json({ message: "Field 'jam_mulai_pengganti' harus berupa waktu yang valid ketika diisi." }, { status: 400 });
+        }
+        jamMulaiPengganti = parsedJamMulaiPengganti;
+      }
+    }
+
+    let jamSelesaiPengganti = null;
+    if (Object.prototype.hasOwnProperty.call(body, 'jam_selesai_pengganti')) {
+      if (!isNullLike(body.jam_selesai_pengganti)) {
+        const parsedJamSelesaiPengganti = parseDateTimeToUTC(body.jam_selesai_pengganti);
+        if (!parsedJamSelesaiPengganti) {
+          return NextResponse.json({ message: "Field 'jam_selesai_pengganti' harus berupa waktu yang valid ketika diisi." }, { status: 400 });
+        }
+        jamSelesaiPengganti = parsedJamSelesaiPengganti;
+      }
+    }
+
+    if (jamMulaiPengganti && jamSelesaiPengganti && jamSelesaiPengganti <= jamMulaiPengganti) {
+      return NextResponse.json({ message: 'jam_selesai_pengganti harus lebih besar dari jam_mulai_pengganti.' }, { status: 400 });
+    }
+
     const statusRaw = body.status ? String(body.status).trim().toLowerCase() : 'pending';
     if (statusRaw && !APPROVE_STATUSES.has(statusRaw)) {
       return NextResponse.json({ message: 'status tidak valid.' }, { status: 400 });
@@ -385,6 +422,9 @@ export async function POST(req) {
           tanggal_izin: tanggalIzin,
           jam_mulai: jamMulai,
           jam_selesai: jamSelesai,
+          tanggal_pengganti: tanggalPengganti,
+          jam_mulai_pengganti: jamMulaiPengganti,
+          jam_selesai_pengganti: jamSelesaiPengganti,
           id_kategori_izin_jam: idKategoriIzinJam,
           keperluan,
           handover,
@@ -414,6 +454,7 @@ export async function POST(req) {
     if (result) {
       const deeplink = `/pengajuan-izin-jam/${result.id_pengajuan_izin_jam}`;
       const waktuRentangDisplay = `${formatTimeDisplay(result.jam_mulai)} - ${formatTimeDisplay(result.jam_selesai)}`;
+      const waktuRentangPenggantiDisplay = result.jam_mulai_pengganti && result.jam_selesai_pengganti ? `${formatTimeDisplay(result.jam_mulai_pengganti)} - ${formatTimeDisplay(result.jam_selesai_pengganti)}` : null;
       const basePayload = {
         nama_pemohon: result.user?.nama_pengguna || 'Rekan',
         kategori_izin: result.kategori?.nama_kategori || '-',
@@ -425,6 +466,13 @@ export async function POST(req) {
         jam_selesai: result.jam_selesai instanceof Date ? result.jam_selesai.toISOString() : null,
         jam_selesai_display: formatTimeDisplay(result.jam_selesai),
         rentang_waktu_display: waktuRentangDisplay,
+        tanggal_pengganti: result.tanggal_pengganti ? formatDateISO(result.tanggal_pengganti) : null,
+        tanggal_pengganti_display: result.tanggal_pengganti ? formatDateDisplay(result.tanggal_pengganti) : null,
+        jam_mulai_pengganti: result.jam_mulai_pengganti instanceof Date ? result.jam_mulai_pengganti.toISOString() : null,
+        jam_mulai_pengganti_display: result.jam_mulai_pengganti ? formatTimeDisplay(result.jam_mulai_pengganti) : null,
+        jam_selesai_pengganti: result.jam_selesai_pengganti instanceof Date ? result.jam_selesai_pengganti.toISOString() : null,
+        jam_selesai_pengganti_display: result.jam_selesai_pengganti ? formatTimeDisplay(result.jam_selesai_pengganti) : null,
+        rentang_waktu_pengganti_display: waktuRentangPenggantiDisplay,
         keperluan: result.keperluan || '-',
         handover: result.handover || '-',
         related_table: 'pengajuan_izin_jam',
