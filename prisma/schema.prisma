@@ -805,6 +805,7 @@ model PengajuanCuti {
   status              ApproveStatus @default(pending)
   current_level       Int?
   jenis_pengajuan     String        @db.VarChar(32)
+  lampiran_cuti_url   String?       @db.LongText
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
