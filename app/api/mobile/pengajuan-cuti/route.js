@@ -129,9 +129,14 @@ function parseDateQuery(value) {
 
 function sanitizeHandoverIds(ids) {
   if (ids === undefined) return undefined;
-  if (!Array.isArray(ids)) return null;
+
+  // --- PERBAIKAN LOGIKA ---
+  // Ubah input tunggal (string) menjadi array
+  const arr = Array.isArray(ids) ? ids : [ids];
+  // --- AKHIR PERBAIKAN ---
+
   const unique = new Set();
-  for (const raw of ids) {
+  for (const raw of arr) {
     const val = String(raw || '').trim();
     if (!val) continue;
     unique.add(val);

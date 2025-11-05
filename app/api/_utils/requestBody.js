@@ -19,14 +19,30 @@ export function isFile(value) {
 
 export async function parseRequestBody(req) {
   const contentType = req.headers.get('content-type') || '';
+
   if (contentType.includes('multipart/form-data')) {
     const form = await req.formData();
     const obj = {};
+
     for (const [key, value] of form.entries()) {
-      obj[key] = value;
+      // --- LOGIKA BARU UNTUK ARRAY ---
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        // Jika key sudah ada, ubah/tambahkan ke array
+        if (Array.isArray(obj[key])) {
+          obj[key].push(value);
+        } else {
+          // Ubah dari string/file tunggal menjadi array
+          obj[key] = [obj[key], value];
+        }
+      } else {
+        // Jika key baru, set nilainya
+        obj[key] = value;
+      }
+      // --- AKHIR LOGIKA BARU ---
     }
     return { type: 'form', body: obj };
   }
+
   try {
     const body = await req.json();
     return { type: 'json', body };
@@ -44,4 +60,3 @@ export function findFileInBody(body, keys = []) {
   }
   return null;
 }
-
