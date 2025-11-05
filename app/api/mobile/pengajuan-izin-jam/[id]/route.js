@@ -16,6 +16,12 @@ const baseInclude = {
       role: true,
     },
   },
+  kategori: {
+    select: {
+      id_kategori_izin_jam: true,
+      nama_kategori: true,
+    },
+  },
   handover_users: {
     include: {
       user: {
@@ -214,12 +220,21 @@ export async function PUT(req, { params }) {
       return NextResponse.json({ message: 'jam_selesai harus lebih besar dari jam_mulai.' }, { status: 400 });
     }
 
-    if (Object.prototype.hasOwnProperty.call(body, 'kategori')) {
-      const kategori = String(body.kategori || '').trim();
-      if (!kategori) {
-        return NextResponse.json({ message: "Field 'kategori' tidak boleh kosong." }, { status: 400 });
+    if (Object.prototype.hasOwnProperty.call(body, 'id_kategori_izin_jam')) {
+      const kategoriId = String(body.id_kategori_izin_jam || '').trim();
+      if (!kategoriId) {
+        return NextResponse.json({ message: "Field 'id_kategori_izin_jam' tidak boleh kosong." }, { status: 400 });
       }
-      data.kategori = kategori;
+
+      const kategori = await db.kategoriIzinJam.findFirst({
+        where: { id_kategori_izin_jam: kategoriId, deleted_at: null },
+        select: { id_kategori_izin_jam: true },
+      });
+      if (!kategori) {
+        return NextResponse.json({ message: 'Kategori izin jam tidak ditemukan.' }, { status: 404 });
+      }
+
+      data.id_kategori_izin_jam = kategoriId;
     }
 
     if (Object.prototype.hasOwnProperty.call(body, 'keperluan')) {

@@ -17,6 +17,12 @@ const baseInclude = {
       role: true,
     },
   },
+  kategori: {
+    select: {
+      id_kategori_izin_jam: true,
+      nama_kategori: true,
+    },
+  },
   handover_users: {
     include: {
       user: {
@@ -251,7 +257,7 @@ export async function GET(req) {
       const keyword = String(q).trim();
       if (keyword) {
         and.push({
-          OR: [{ kategori: { contains: keyword, mode: 'insensitive' } }, { keperluan: { contains: keyword, mode: 'insensitive' } }, { handover: { contains: keyword, mode: 'insensitive' } }],
+          OR: [{ kategori: { nama_kategori: { contains: keyword } } }, { keperluan: { contains: keyword } }, { handover: { contains: keyword } }],
         });
       }
     }
@@ -320,9 +326,21 @@ export async function POST(req) {
       return NextResponse.json({ message: 'jam_selesai harus lebih besar dari jam_mulai.' }, { status: 400 });
     }
 
-    const kategori = String(body.kategori || '').trim();
-    if (!kategori) {
-      return NextResponse.json({ message: "Field 'kategori' wajib diisi." }, { status: 400 });
+    if (!Object.prototype.hasOwnProperty.call(body, 'id_kategori_izin_jam')) {
+      return NextResponse.json({ message: "Field 'id_kategori_izin_jam' wajib diisi." }, { status: 400 });
+    }
+
+    const idKategoriIzinJam = String(body.id_kategori_izin_jam || '').trim();
+    if (!idKategoriIzinJam) {
+      return NextResponse.json({ message: "Field 'id_kategori_izin_jam' wajib diisi." }, { status: 400 });
+    }
+
+    const kategoriIzinJam = await db.kategoriIzinJam.findFirst({
+      where: { id_kategori_izin_jam: idKategoriIzinJam, deleted_at: null },
+      select: { id_kategori_izin_jam: true },
+    });
+    if (!kategoriIzinJam) {
+      return NextResponse.json({ message: 'Kategori izin jam tidak ditemukan.' }, { status: 404 });
     }
 
     const targetUserId = canManageAll(actorRole) && body.id_user ? String(body.id_user).trim() : actorId;
@@ -367,7 +385,7 @@ export async function POST(req) {
           tanggal_izin: tanggalIzin,
           jam_mulai: jamMulai,
           jam_selesai: jamSelesai,
-          kategori,
+          id_kategori_izin_jam: idKategoriIzinJam,
           keperluan,
           handover,
           lampiran_izin_jam_url: lampiran ?? null,
@@ -398,7 +416,8 @@ export async function POST(req) {
       const waktuRentangDisplay = `${formatTimeDisplay(result.jam_mulai)} - ${formatTimeDisplay(result.jam_selesai)}`;
       const basePayload = {
         nama_pemohon: result.user?.nama_pengguna || 'Rekan',
-        kategori_izin: result.kategori || '-',
+        kategori_izin: result.kategori?.nama_kategori || '-',
+        id_kategori_izin_jam: result.id_kategori_izin_jam,
         tanggal_izin: formatDateISO(result.tanggal_izin),
         tanggal_izin_display: formatDateDisplay(result.tanggal_izin),
         jam_mulai: result.jam_mulai instanceof Date ? result.jam_mulai.toISOString() : null,
