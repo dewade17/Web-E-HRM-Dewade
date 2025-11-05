@@ -5,6 +5,7 @@ import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 import { extractWeeklyScheduleInput, normalizeWeeklySchedule, parseHariKerjaField, serializeHariKerja, transformShiftRecord } from '../schedul-utils';
 import { sendNotification } from '@/app/utils/services/notificationService';
+
 const SHIFT_STATUS = ['KERJA', 'LIBUR'];
 
 async function ensureAuth(req) {
@@ -33,7 +34,10 @@ function parseBodyDate(value, field) {
   return parsed;
 }
 
-export async function GET(_req, { params }) {
+export async function GET(req, { params }) {
+  const ok = await ensureAuth(req); // <-- perbaikan: auth
+  if (ok instanceof NextResponse) return ok;
+
   try {
     const { id } = params;
     const rawData = await db.shiftKerja.findUnique({
@@ -73,6 +77,7 @@ export async function GET(_req, { params }) {
     return NextResponse.json({ message: 'Server error' }, { status: 500 });
   }
 }
+
 function formatDateOnly(value) {
   if (!value) return '-';
   try {
@@ -192,7 +197,10 @@ export async function PUT(req, { params }) {
       }
     }
 
-    if (body.id_pola_kerja !== undefined) {
+    // === Perbaikan: status LIBUR harus memaksa pola null
+    if (data.status === 'LIBUR') {
+      data.id_pola_kerja = null;
+    } else if (body.id_pola_kerja !== undefined) {
       if (body.id_pola_kerja === null || body.id_pola_kerja === '') {
         data.id_pola_kerja = null;
       } else {
@@ -215,44 +223,57 @@ export async function PUT(req, { params }) {
       return NextResponse.json({ message: 'Tidak ada perubahan yang diberikan.' }, { status: 400 });
     }
 
-    const updated = await db.shiftKerja.update({
-      where: { id_shift_kerja: id },
-      data,
-      select: {
-        id_shift_kerja: true,
-        id_user: true,
-        tanggal_mulai: true,
-        tanggal_selesai: true,
-        hari_kerja: true,
-        status: true,
-        id_pola_kerja: true,
-        updated_at: true,
-        deleted_at: true,
-        user: { select: { id_user: true, nama_pengguna: true } },
-        polaKerja: {
-          select: {
-            id_pola_kerja: true,
-            nama_pola_kerja: true,
-            jam_mulai: true,
-            jam_selesai: true,
+    try {
+      const updated = await db.shiftKerja.update({
+        where: { id_shift_kerja: id },
+        data,
+        select: {
+          id_shift_kerja: true,
+          id_user: true,
+          tanggal_mulai: true,
+          tanggal_selesai: true,
+          hari_kerja: true,
+          status: true,
+          id_pola_kerja: true,
+          updated_at: true,
+          deleted_at: true,
+          user: { select: { id_user: true, nama_pengguna: true } },
+          polaKerja: {
+            select: {
+              id_pola_kerja: true,
+              nama_pola_kerja: true,
+              jam_mulai: true,
+              jam_selesai: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    const notificationPayload = {
-      nama_karyawan: updated.user?.nama_pengguna || 'Karyawan',
-      tanggal_shift: formatDateOnly(updated.tanggal_mulai ?? updated.tanggal_selesai),
-      nama_shift: updated.polaKerja?.nama_pola_kerja || 'Shift',
-      jam_masuk: formatTimeValue(updated.polaKerja?.jam_mulai),
-      jam_pulang: formatTimeValue(updated.polaKerja?.jam_selesai),
-    };
+      const notificationPayload = {
+        nama_karyawan: updated.user?.nama_pengguna || 'Karyawan',
+        tanggal_shift: formatDateOnly(updated.tanggal_mulai ?? updated.tanggal_selesai),
+        nama_shift: updated.polaKerja?.nama_pola_kerja || 'Shift',
+        jam_masuk: formatTimeValue(updated.polaKerja?.jam_mulai),
+        jam_pulang: formatTimeValue(updated.polaKerja?.jam_selesai),
+      };
 
-    console.info('[NOTIF] Mengirim notifikasi SHIFT_UPDATED untuk user %s dengan payload %o', updated.id_user, notificationPayload);
-    await sendNotification('SHIFT_UPDATED', updated.id_user, notificationPayload);
-    console.info('[NOTIF] Notifikasi SHIFT_UPDATED selesai diproses untuk user %s', updated.id_user);
+      console.info('[NOTIF] Mengirim notifikasi SHIFT_UPDATED untuk user %s dengan payload %o', updated.id_user, notificationPayload);
+      await sendNotification('SHIFT_UPDATED', updated.id_user, notificationPayload);
+      console.info('[NOTIF] Notifikasi SHIFT_UPDATED selesai diproses untuk user %s', updated.id_user);
 
-    return NextResponse.json({ message: 'Shift kerja diperbarui.', data: transformShiftRecord(updated) });
+      return NextResponse.json({ message: 'Shift kerja diperbarui.', data: transformShiftRecord(updated) });
+    } catch (err) {
+      // === Perbaikan: tangkap konflik unik (ubah id_user/tanggal_ke_yang_sudah_ada)
+      if (err?.code === 'P2002') {
+        return NextResponse.json(
+          {
+            message: 'Sudah ada shift untuk kombinasi pengguna & tanggal tersebut.',
+          },
+          { status: 409 }
+        );
+      }
+      throw err;
+    }
   } catch (err) {
     if (err?.code === 'P2025') {
       return NextResponse.json({ message: 'Shift kerja tidak ditemukan' }, { status: 404 });

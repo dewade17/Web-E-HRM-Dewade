@@ -10,7 +10,7 @@ import { verifyAuthToken } from '@/lib/jwt';
 /* =========================================================
    ALLOWLIST: KARYAWAN hanya boleh ubah field berikut
    =======================================================*/
-const KARYAWAN_ALLOW = new Set(['nama_pengguna', 'email', 'kontak', 'agama', 'foto_profil_user', 'tanggal_lahir', 'alamat_ktp', 'alamat_domisili', 'golongan_darah', 'nomor_rekening', 'jenis_bank']);
+const KARYAWAN_ALLOW = new Set(['nama_pengguna', 'email', 'kontak', 'agama', 'foto_profil_user', 'tanggal_lahir', 'alamat_ktp', 'alamat_domisili', 'golongan_darah', 'nomor_rekening', 'jenis_bank', 'nama_kontak_darurat', 'kontak_darurat']);
 
 /* =========================================================
    SUPABASE STORAGE HELPERS
@@ -236,6 +236,8 @@ export async function GET(req, { params }) {
         alamat_domisili: true,
         alamat_ktp: true,
         kontak: true,
+        nama_kontak_darurat: true,
+        kontak_darurat: true,
         agama: true,
         tanggal_lahir: true,
         golongan_darah: true,
@@ -296,7 +298,8 @@ export async function PUT(req, { params }) {
     const golonganDarah = normalizeNullableString(body.golongan_darah);
     const nomorRekening = normalizeNullableString(body.nomor_rekening);
     const jenisBank = normalizeNullableString(body.jenis_bank);
-
+    const namaKontakDarurat = normalizeNullableString(body.nama_kontak_darurat);
+    const kontakDarurat = normalizeNullableString(body.kontak_darurat);
     // Upload foto bila multipart
     let uploadedUrl = null;
     if (type === 'form') {
@@ -317,6 +320,8 @@ export async function PUT(req, { params }) {
       ...(alamatDomisili.defined && { alamat_domisili: alamatDomisili.value }),
       ...(alamatKtp.defined && { alamat_ktp: alamatKtp.value }),
       ...(kontak.defined && { kontak: kontak.value }),
+      ...(namaKontakDarurat.defined && { nama_kontak_darurat: namaKontakDarurat.value }),
+      ...(kontakDarurat.defined && { kontak_darurat: kontakDarurat.value }),
       ...(agama.defined && { agama: agama.value }),
       ...(tanggalLahirValue !== undefined && { tanggal_lahir: tanggalLahirValue }),
       ...(golonganDarah.defined && { golongan_darah: golonganDarah.value }),
@@ -351,6 +356,8 @@ export async function PUT(req, { params }) {
         alamat_domisili: true,
         alamat_ktp: true,
         kontak: true,
+        nama_kontak_darurat: true,
+        kontak_darurat: true,
         agama: true,
         tanggal_lahir: true,
         golongan_darah: true,

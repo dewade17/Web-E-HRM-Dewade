@@ -6,17 +6,13 @@ import db from '../../../../../lib/prisma';
 import { verifyAuthToken } from '../../../../../lib/jwt';
 import { authenticateRequest } from '../../../../../app/utils/auth/authUtils';
 import { createClient } from '@supabase/supabase-js';
-import {
-  JENIS_KELAMIN_VALUES,
-  STATUS_KERJA_VALUES,
-  normalizeNullableEnum,
-  normalizeNullableInt,
-  normalizeNullableString,
-  normalizeOptionalDate,
-} from '../../../_utils/user-field-normalizer';
+import { JENIS_KELAMIN_VALUES, STATUS_KERJA_VALUES, normalizeNullableEnum, normalizeNullableInt, normalizeNullableString, normalizeOptionalDate } from '../../../_utils/user-field-normalizer';
 
 // ===== Helpers umum =====
-const normRole = (r) => String(r || '').trim().toUpperCase();
+const normRole = (r) =>
+  String(r || '')
+    .trim()
+    .toUpperCase();
 const VIEW_ROLES = new Set(['HR', 'DIREKTUR', 'SUPERADMIN']);
 const EDIT_ROLES = new Set(['HR', 'DIREKTUR', 'SUPERADMIN']);
 const DELETE_ROLES = new Set(['HR', 'DIREKTUR', 'SUPERADMIN']);
@@ -127,6 +123,8 @@ export async function GET(_req, { params }) {
         nama_pengguna: true,
         email: true,
         kontak: true,
+        nama_kontak_darurat: true,
+        kontak_darurat: true,
         agama: true,
         foto_profil_user: true,
         tanggal_lahir: true,
@@ -158,7 +156,7 @@ export async function GET(_req, { params }) {
         jenis_bank: true,
         created_at: true,
         updated_at: true,
-        departement: { select: { id_departement: true, nama_departement: true} },
+        departement: { select: { id_departement: true, nama_departement: true } },
         kantor: { select: { id_location: true, nama_kantor: true } },
         jabatan: { select: { id_jabatan: true, nama_jabatan: true } },
       },
@@ -192,28 +190,23 @@ export async function PUT(req, { params }) {
 
     const wantsRemove = body.remove_foto === true || body.remove_foto === 'true';
 
-    const { value: tanggalLahirValue, error: tanggalLahirError } =
-      normalizeOptionalDate(body.tanggal_lahir, 'tanggal_lahir');
+    const { value: tanggalLahirValue, error: tanggalLahirError } = normalizeOptionalDate(body.tanggal_lahir, 'tanggal_lahir');
     if (tanggalLahirError) {
       return NextResponse.json({ message: tanggalLahirError }, { status: 400 });
     }
-    const { value: tanggalMulaiValue, error: tanggalMulaiError } =
-      normalizeOptionalDate(body.tanggal_mulai_bekerja, 'tanggal_mulai_bekerja');
+    const { value: tanggalMulaiValue, error: tanggalMulaiError } = normalizeOptionalDate(body.tanggal_mulai_bekerja, 'tanggal_mulai_bekerja');
     if (tanggalMulaiError) {
       return NextResponse.json({ message: tanggalMulaiError }, { status: 400 });
     }
-    const { value: tahunLulusValue, error: tahunLulusError } =
-      normalizeNullableInt(body.tahun_lulus, 'tahun_lulus');
+    const { value: tahunLulusValue, error: tahunLulusError } = normalizeNullableInt(body.tahun_lulus, 'tahun_lulus');
     if (tahunLulusError) {
       return NextResponse.json({ message: tahunLulusError }, { status: 400 });
     }
-    const { value: jenisKelaminValue, error: jenisKelaminError } =
-      normalizeNullableEnum(body.jenis_kelamin, JENIS_KELAMIN_VALUES, 'jenis_kelamin');
+    const { value: jenisKelaminValue, error: jenisKelaminError } = normalizeNullableEnum(body.jenis_kelamin, JENIS_KELAMIN_VALUES, 'jenis_kelamin');
     if (jenisKelaminError) {
       return NextResponse.json({ message: jenisKelaminError }, { status: 400 });
     }
-    const { value: statusKerjaValue, error: statusKerjaError } =
-      normalizeNullableEnum(body.status_kerja, STATUS_KERJA_VALUES, 'status_kerja');
+    const { value: statusKerjaValue, error: statusKerjaError } = normalizeNullableEnum(body.status_kerja, STATUS_KERJA_VALUES, 'status_kerja');
     if (statusKerjaError) {
       return NextResponse.json({ message: statusKerjaError }, { status: 400 });
     }
@@ -247,7 +240,8 @@ export async function PUT(req, { params }) {
     const jabatanId = normalizeNullableString(body.id_jabatan);
     const nomorRekening = normalizeNullableString(body.nomor_rekening);
     const jenisBank = normalizeNullableString(body.jenis_bank);
-
+    const namaKontakDarurat = normalizeNullableString(body.nama_kontak_darurat);
+    const kontakDarurat = normalizeNullableString(body.kontak_darurat);
     let uploadedUrl = null;
     if (type === 'form') {
       const file = body.file || body.foto || body.foto_profil_user;
@@ -264,6 +258,8 @@ export async function PUT(req, { params }) {
       ...(body.nama_pengguna !== undefined && { nama_pengguna: String(body.nama_pengguna).trim() }),
       ...(body.email !== undefined && { email: String(body.email).trim().toLowerCase() }),
       ...(body.kontak !== undefined && { kontak: body.kontak === null ? null : String(body.kontak).trim() }),
+      ...(namaKontakDarurat.value !== undefined && { nama_kontak_darurat: namaKontakDarurat.value }),
+      ...(kontakDarurat.value !== undefined && { kontak_darurat: kontakDarurat.value }),
       ...(body.agama !== undefined && { agama: body.agama === null ? null : String(body.agama).trim() }),
       ...(tanggalLahirValue !== undefined && { tanggal_lahir: tanggalLahirValue }),
       ...(tempatLahir.value !== undefined && { tempat_lahir: tempatLahir.value }),
@@ -333,6 +329,8 @@ export async function PUT(req, { params }) {
         nama_pengguna: true,
         email: true,
         kontak: true,
+        nama_kontak_darurat: true,
+        kontak_darurat: true,
         agama: true,
         foto_profil_user: true,
         tanggal_lahir: true,

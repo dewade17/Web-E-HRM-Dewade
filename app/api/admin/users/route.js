@@ -7,13 +7,12 @@ async function getActor(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
     try {
-      const payload = verifyAuthToken(auth.slice(7)); 
+      const payload = verifyAuthToken(auth.slice(7));
       return { id: payload?.sub || payload?.id_user || payload?.userId, role: payload?.role, source: 'bearer' };
-    } catch (_) {
-    }
+    } catch (_) {}
   }
   const sessionOrRes = await authenticateRequest();
-  if (sessionOrRes instanceof NextResponse) return sessionOrRes; 
+  if (sessionOrRes instanceof NextResponse) return sessionOrRes;
   return { id: sessionOrRes.user.id, role: sessionOrRes.user.role, source: 'session' };
 }
 
@@ -72,6 +71,8 @@ export async function GET(req) {
           nama_pengguna: true,
           email: true,
           kontak: true,
+          nama_kontak_darurat: true,
+          kontak_darurat: true,
           agama: true,
           foto_profil_user: true,
           tanggal_lahir: true,

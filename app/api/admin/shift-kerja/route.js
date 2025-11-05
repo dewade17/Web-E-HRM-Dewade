@@ -5,6 +5,7 @@ import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 import { extractWeeklyScheduleInput, normalizeWeeklySchedule, serializeHariKerja, transformShiftRecord } from './schedul-utils';
 import { sendNotification } from '@/app/utils/services/notificationService';
+
 const SHIFT_STATUS = ['KERJA', 'LIBUR'];
 
 async function ensureAuth(req) {
@@ -13,7 +14,7 @@ async function ensureAuth(req) {
     try {
       verifyAuthToken(auth.slice(7));
       return true;
-    } catch (_) {}
+    } catch {}
   }
   const sessionOrRes = await authenticateRequest();
   if (sessionOrRes instanceof NextResponse) return sessionOrRes;
@@ -27,7 +28,7 @@ function parseBodyDate(value, field) {
     throw new Error(`Field '${field}' harus berupa tanggal yang valid.`);
   }
   const parsed = parseDateOnlyToUTC(value);
-  if (!(parsed instanceof Date)) {
+  if (!(parsed instanceof Date) || isNaN(+parsed)) {
     throw new Error(`Field '${field}' harus berupa tanggal yang valid.`);
   }
   return parsed;
@@ -39,14 +40,14 @@ function buildDateFilter(searchParams, field) {
   const filter = {};
   if (from) {
     const parsed = parseDateOnlyToUTC(from);
-    if (!(parsed instanceof Date)) {
+    if (!(parsed instanceof Date) || isNaN(+parsed)) {
       throw new Error(`Parameter '${field}From' tidak valid.`);
     }
     filter.gte = parsed;
   }
   if (to) {
     const parsed = parseDateOnlyToUTC(to);
-    if (!(parsed instanceof Date)) {
+    if (!(parsed instanceof Date) || isNaN(+parsed)) {
       throw new Error(`Parameter '${field}To' tidak valid.`);
     }
     filter.lte = parsed;
@@ -74,32 +75,23 @@ export async function GET(req) {
     };
 
     const idUser = (searchParams.get('id_user') || '').trim();
-    if (idUser) {
-      where.id_user = idUser;
-    }
+    if (idUser) where.id_user = idUser;
 
     const idPolaKerjaRaw = searchParams.get('id_pola_kerja');
     if (idPolaKerjaRaw !== null) {
       const trimmed = idPolaKerjaRaw.trim();
-      if (trimmed === 'null') {
-        where.id_pola_kerja = null;
-      } else if (trimmed) {
-        where.id_pola_kerja = trimmed;
-      }
+      if (trimmed === 'null') where.id_pola_kerja = null;
+      else if (trimmed) where.id_pola_kerja = trimmed;
     }
 
+    // === Perbaikan: relation filter pakai { is: ... } ===
     const userFilter = {};
-
     const jabatanParam = searchParams.get('id_jabatan');
     if (jabatanParam !== null) {
       const trimmed = jabatanParam.trim();
-      if (trimmed === 'null') {
-        userFilter.id_jabatan = null;
-      } else if (trimmed) {
-        userFilter.id_jabatan = trimmed;
-      }
+      if (trimmed === 'null') userFilter.id_jabatan = null;
+      else if (trimmed) userFilter.id_jabatan = trimmed;
     }
-
     const jabatanSearch = (searchParams.get('searchJabatan') || '').trim();
     if (jabatanSearch) {
       userFilter.jabatan = {
@@ -110,9 +102,8 @@ export async function GET(req) {
         },
       };
     }
-
     if (Object.keys(userFilter).length > 0) {
-      where.user = userFilter;
+      where.user = { is: userFilter }; // <-- penting
     }
 
     const status = (searchParams.get('status') || '').trim();
@@ -125,14 +116,9 @@ export async function GET(req) {
     }
 
     const tanggalMulaiFilter = buildDateFilter(searchParams, 'tanggalMulai');
-    if (tanggalMulaiFilter) {
-      where.tanggal_mulai = tanggalMulaiFilter;
-    }
-
+    if (tanggalMulaiFilter) where.tanggal_mulai = tanggalMulaiFilter;
     const tanggalSelesaiFilter = buildDateFilter(searchParams, 'tanggalSelesai');
-    if (tanggalSelesaiFilter) {
-      where.tanggal_selesai = tanggalSelesaiFilter;
-    }
+    if (tanggalSelesaiFilter) where.tanggal_selesai = tanggalSelesaiFilter;
 
     const [total, rawData] = await Promise.all([
       db.shiftKerja.count({ where }),
@@ -152,33 +138,16 @@ export async function GET(req) {
           created_at: true,
           updated_at: true,
           deleted_at: true,
-          user: {
-            select: {
-              id_user: true,
-              nama_pengguna: true,
-              email: true,
-            },
-          },
-          polaKerja: {
-            select: {
-              id_pola_kerja: true,
-              nama_pola_kerja: true,
-            },
-          },
+          user: { select: { id_user: true, nama_pengguna: true, email: true } },
+          polaKerja: { select: { id_pola_kerja: true, nama_pola_kerja: true } },
         },
       }),
     ]);
 
     const data = rawData.map(transformShiftRecord);
-
     return NextResponse.json({
       data,
-      pagination: {
-        page,
-        pageSize,
-        total,
-        totalPages: Math.ceil(total / pageSize),
-      },
+      pagination: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) },
     });
   } catch (err) {
     if (err instanceof Error && err.message.includes('tanggal')) {
@@ -200,6 +169,7 @@ export async function POST(req) {
     if (!idUser) {
       return NextResponse.json({ message: "Field 'id_user' wajib diisi." }, { status: 400 });
     }
+
     const targetUser = await db.user.findUnique({
       where: { id_user: idUser },
       select: { id_user: true, nama_pengguna: true },
@@ -207,6 +177,7 @@ export async function POST(req) {
     if (!targetUser) {
       return NextResponse.json({ message: 'User tidak ditemukan.' }, { status: 404 });
     }
+
     const statusRaw = body.status ? String(body.status).toUpperCase().trim() : '';
     if (!SHIFT_STATUS.includes(statusRaw)) {
       return NextResponse.json({ message: "Field 'status' tidak valid." }, { status: 400 });
@@ -220,19 +191,17 @@ export async function POST(req) {
 
     if (weeklyScheduleInput !== undefined) {
       const fallbackStart = body.tanggal_mulai ?? body.start_date ?? body.startDate ?? body.mulai ?? body.referenceDate ?? body.weekStart;
+
       const fallbackEnd = body.tanggal_selesai ?? body.end_date ?? body.endDate ?? body.selesai ?? body.until ?? body.weekEnd;
 
-      try {
-        const normalized = normalizeWeeklySchedule(weeklyScheduleInput, {
-          fallbackStartDate: fallbackStart,
-          fallbackEndDate: fallbackEnd,
-        });
-        hariKerjaValue = serializeHariKerja(normalized.schedule);
-        tanggalMulai = normalized.tanggalMulai;
-        tanggalSelesai = normalized.tanggalSelesai;
-      } catch (scheduleErr) {
-        return NextResponse.json({ message: scheduleErr.message }, { status: 400 });
-      }
+      const normalized = normalizeWeeklySchedule(weeklyScheduleInput, {
+        fallbackStartDate: fallbackStart,
+        fallbackEndDate: fallbackEnd,
+      });
+
+      hariKerjaValue = serializeHariKerja(normalized.schedule);
+      tanggalMulai = normalized.tanggalMulai;
+      tanggalSelesai = normalized.tanggalSelesai;
     } else {
       const hariKerja = body.hari_kerja ? String(body.hari_kerja).trim() : '';
       if (!hariKerja) {
@@ -240,15 +209,18 @@ export async function POST(req) {
       }
       hariKerjaValue = hariKerja;
 
-      try {
-        tanggalMulai = parseBodyDate(body.tanggal_mulai, 'tanggal_mulai');
-        tanggalSelesai = parseBodyDate(body.tanggal_selesai, 'tanggal_selesai');
-      } catch (parseErr) {
-        return NextResponse.json({ message: parseErr.message }, { status: 400 });
-      }
+      tanggalMulai = parseBodyDate(body.tanggal_mulai, 'tanggal_mulai');
+      // default single-day → tanggal_selesai = tanggal_mulai
+      tanggalSelesai = parseBodyDate(body.tanggal_selesai ?? body.tanggal_mulai, 'tanggal_selesai');
     }
 
-    if (tanggalMulai instanceof Date && tanggalSelesai instanceof Date && tanggalSelesai < tanggalMulai) {
+    if (!(tanggalMulai instanceof Date) || isNaN(+tanggalMulai)) {
+      return NextResponse.json({ message: "Field 'tanggal_mulai' wajib diisi (tanggal valid)." }, { status: 400 });
+    }
+    if (!(tanggalSelesai instanceof Date) || isNaN(+tanggalSelesai)) {
+      return NextResponse.json({ message: "Field 'tanggal_selesai' wajib diisi (tanggal valid)." }, { status: 400 });
+    }
+    if (tanggalSelesai < tanggalMulai) {
       return NextResponse.json({ message: "Field 'tanggal_selesai' tidak boleh lebih awal dari 'tanggal_mulai'." }, { status: 400 });
     }
 
@@ -271,14 +243,31 @@ export async function POST(req) {
       }
     }
 
-    const created = await db.shiftKerja.create({
-      data: {
-        id_user: idUser,
-        hari_kerja: hariKerjaValue,
-        status: statusRaw,
-        tanggal_mulai: tanggalMulai ?? null,
-        tanggal_selesai: tanggalSelesai ?? null,
-        id_pola_kerja: idPolaKerja,
+    const payloadCreateOrUpdate = {
+      id_user: idUser,
+      hari_kerja: hariKerjaValue,
+      status: statusRaw,
+      tanggal_mulai: tanggalMulai,
+      tanggal_selesai: tanggalSelesai ?? tanggalMulai,
+      id_pola_kerja: statusRaw === 'LIBUR' ? null : idPolaKerja ?? null,
+    };
+
+    // === Perbaikan penting: revive soft-deleted via deleted_at: null
+    const upserted = await db.shiftKerja.upsert({
+      where: {
+        // gunakan nama @@unique di Prisma schema
+        uniq_shift_per_user_per_date: {
+          id_user: idUser,
+          tanggal_mulai: tanggalMulai,
+        },
+      },
+      create: {
+        ...payloadCreateOrUpdate,
+        deleted_at: null,
+      },
+      update: {
+        ...payloadCreateOrUpdate,
+        deleted_at: null, // pastikan bangkit dari soft delete
       },
       select: {
         id_shift_kerja: true,
@@ -296,23 +285,22 @@ export async function POST(req) {
       if (!value) return '-';
       try {
         return value.toISOString().slice(0, 10);
-      } catch (formatErr) {
-        console.warn('Gagal memformat tanggal shift untuk notifikasi:', formatErr);
+      } catch {
         return '-';
       }
     };
 
     const notificationPayload = {
       nama_karyawan: targetUser.nama_pengguna || 'Karyawan',
-      periode_mulai: formatDateOnly(created.tanggal_mulai),
-      periode_selesai: formatDateOnly(created.tanggal_selesai),
+      periode_mulai: formatDateOnly(upserted.tanggal_mulai),
+      periode_selesai: formatDateOnly(upserted.tanggal_selesai),
     };
 
-    console.info('[NOTIF] Mengirim notifikasi NEW_SHIFT_PUBLISHED untuk user %s dengan payload %o', created.id_user, notificationPayload);
-    await sendNotification('NEW_SHIFT_PUBLISHED', created.id_user, notificationPayload);
-    console.info('[NOTIF] Notifikasi NEW_SHIFT_PUBLISHED selesai diproses untuk user %s', created.id_user);
+    console.info('[NOTIF] Mengirim notifikasi NEW_SHIFT_PUBLISHED untuk user %s dengan payload %o', upserted.id_user, notificationPayload);
+    await sendNotification('NEW_SHIFT_PUBLISHED', upserted.id_user, notificationPayload);
+    console.info('[NOTIF] Notifikasi NEW_SHIFT_PUBLISHED selesai diproses untuk user %s', upserted.id_user);
 
-    return NextResponse.json({ message: 'Shift kerja dibuat.', data: transformShiftRecord(created) }, { status: 201 });
+    return NextResponse.json({ message: 'Shift kerja disimpan.', data: transformShiftRecord(upserted) }, { status: 201 });
   } catch (err) {
     console.error('POST /shift-kerja error:', err);
     return NextResponse.json({ message: 'Server error' }, { status: 500 });
