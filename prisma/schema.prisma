@@ -343,6 +343,7 @@ model User {
   email                     String        @unique @db.VarChar(255)
   password_hash             String        @db.VarChar(255)
   kontak                    String?       @db.VarChar(32)
+  nama_kontak_darurat       String?       @db.VarChar(32)
   kontak_darurat            String?       @db.VarChar(32)
   password_updated_at       DateTime?     @db.DateTime(0)
   agama                     String?       @db.VarChar(32)
