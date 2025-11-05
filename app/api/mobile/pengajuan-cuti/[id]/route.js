@@ -4,6 +4,8 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 import { ensureAuth, pengajuanInclude, sanitizeHandoverIds, normalizeStatus } from '../route';
+import storageClient from '@/app/api/_utils/storageClient';
+import { parseRequestBody, findFileInBody, hasOwn, isNullLike } from '@/app/api/_utils/requestBody';
 
 async function getPengajuanOrError(id) {
   return db.pengajuanCuti.findUnique({
@@ -81,12 +83,14 @@ async function handleUpdate(req, params) {
     return NextResponse.json({ ok: false, message: 'ID pengajuan wajib diisi.' }, { status: 400 });
   }
 
-  let body;
+  let parsed;
   try {
-    body = await req.json();
+    parsed = await parseRequestBody(req);
   } catch (err) {
-    return NextResponse.json({ ok: false, message: 'Body request harus berupa JSON.' }, { status: 400 });
+    const status = err?.status || 400;
+    return NextResponse.json({ ok: false, message: err?.message || 'Body request tidak valid.' }, { status });
   }
+  const body = parsed.body || {};
 
   try {
     const pengajuan = await getPengajuanOrError(id);
@@ -98,6 +102,7 @@ async function handleUpdate(req, params) {
     }
 
     const updateData = {};
+    let uploadMeta = null;
 
     if (hasOwn(body, 'id_kategori_cuti')) {
       const idKategori = String(body.id_kategori_cuti || '').trim();
@@ -138,6 +143,20 @@ async function handleUpdate(req, params) {
 
     if (hasOwn(body, 'handover')) {
       updateData.handover = normalizeBodyString(body.handover);
+    }
+
+    // Handle lampiran_cuti: can be File (multipart) or URL string/null
+    const lampiranFile = findFileInBody(body, ['lampiran_cuti', 'lampiran', 'lampiran_file', 'file']);
+    if (lampiranFile) {
+      try {
+        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
+        updateData.lampiran_cuti_url = res.publicUrl || null;
+        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+      } catch (e) {
+        return NextResponse.json({ ok: false, message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+      }
+    } else if (hasOwn(body, 'lampiran_cuti_url')) {
+      updateData.lampiran_cuti_url = isNullLike(body.lampiran_cuti_url) ? null : String(body.lampiran_cuti_url);
     }
 
     if (hasOwn(body, 'status')) {
@@ -205,7 +224,7 @@ async function handleUpdate(req, params) {
       });
     });
 
-    return NextResponse.json({ ok: true, message: 'Pengajuan cuti berhasil diperbarui.', data: updated });
+    return NextResponse.json({ ok: true, message: 'Pengajuan cuti berhasil diperbarui.', data: updated, upload: uploadMeta || undefined });
   } catch (err) {
     console.error(`UPDATE /mobile/pengajuan-cuti/${id} error:`, err);
     return NextResponse.json({ ok: false, message: 'Gagal memperbarui pengajuan cuti.' }, { status: 500 });

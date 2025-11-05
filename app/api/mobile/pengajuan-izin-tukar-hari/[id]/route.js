@@ -3,6 +3,8 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
+import storageClient from '@/app/api/_utils/storageClient';
+import { parseRequestBody, findFileInBody, hasOwn, isNullLike } from '@/app/api/_utils/requestBody';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -151,7 +153,8 @@ export async function PUT(req, { params }) {
       return NextResponse.json({ message: 'Forbidden.' }, { status: 403 });
     }
 
-    const body = await req.json();
+    const parsed = await parseRequestBody(req);
+    const body = parsed.body || {};
 
     const data = {};
 
@@ -234,6 +237,22 @@ export async function PUT(req, { params }) {
       await validateTaggedUsers(tagUserIds);
     }
 
+    let uploadMeta = null;
+    const newFile = findFileInBody(body, ['lampiran_izin_tukar_hari', 'lampiran', 'lampiran_file', 'file']);
+    if (newFile) {
+      try {
+        const res = await storageClient.uploadBufferWithPresign(newFile, { folder: 'pengajuan' });
+        data.lampiran_izin_tukar_hari_url = res.publicUrl || null;
+        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+      } catch (e) {
+        return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+      }
+    } else if (hasOwn(body, 'lampiran_izin_tukar_hari_url')) {
+      data.lampiran_izin_tukar_hari_url = isNullLike(body.lampiran_izin_tukar_hari_url)
+        ? null
+        : String(body.lampiran_izin_tukar_hari_url).trim();
+    }
+
     const updated = await db.$transaction(async (tx) => {
       const saved = await tx.izinTukarHari.update({
         where: { id_izin_tukar_hari: pengajuan.id_izin_tukar_hari },
@@ -276,7 +295,7 @@ export async function PUT(req, { params }) {
       });
     });
 
-    return NextResponse.json({ message: 'Pengajuan izin tukar hari berhasil diperbarui.', data: updated });
+    return NextResponse.json({ message: 'Pengajuan izin tukar hari berhasil diperbarui.', data: updated, upload: uploadMeta || undefined });
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err?.code === 'P2003') {

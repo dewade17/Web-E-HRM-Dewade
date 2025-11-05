@@ -34,3 +34,21 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Mobile API Attachments
+
+Endpoints now support file attachments via multipart/form-data, while keeping URL string fields for backward compatibility.
+
+- Content-Type multipart: send file fields:
+  - `lampiran_izin_sakit` for `/api/mobile/pengajuan-izin-sakit`
+  - `lampiran_izin_jam` for `/api/mobile/pengajuan-izin-jam`
+  - `lampiran_cuti` for `/api/mobile/pengajuan-cuti`
+  - `lampiran_izin_tukar_hari` for `/api/mobile/pengajuan-izin-tukar-hari`
+- JSON fallback: provide URL string fields:
+  - `lampiran_izin_sakit_url`, `lampiran_izin_jam_url`, `lampiran_cuti_url`, `lampiran_izin_tukar_hari_url`
+- Remove attachment: on PUT/PATCH, set the URL field to `null` or an empty string.
+- Response includes `upload` metadata (when a file is uploaded): `key`, `publicUrl`, `etag`, `size`.
+
+Storage gateway configuration via env:
+- `OSS_STORAGE_BASE_URL` (optional): storage service base URL. When omitted, the app uses its own origin.
+- `OSS_STORAGE_API_KEY` (optional): sent as `x-api-key` header.

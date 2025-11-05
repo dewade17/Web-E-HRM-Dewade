@@ -6,6 +6,8 @@ import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 import { sendNotification } from '@/app/utils/services/notificationService';
+import storageClient from '@/app/api/_utils/storageClient';
+import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 
 const pengajuanInclude = {
@@ -275,12 +277,14 @@ export async function POST(req) {
     return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
   }
 
-  let body;
+  let parsed;
   try {
-    body = await req.json();
+    parsed = await parseRequestBody(req);
   } catch (err) {
-    return NextResponse.json({ ok: false, message: 'Body request harus berupa JSON.' }, { status: 400 });
+    const status = err?.status || 400;
+    return NextResponse.json({ ok: false, message: err?.message || 'Body request tidak valid.' }, { status });
   }
+  const body = parsed.body || {};
 
   try {
     const id_kategori_cuti = String(body?.id_kategori_cuti || '').trim();
@@ -337,6 +341,19 @@ export async function POST(req) {
       }
     }
 
+    let uploadMeta = null;
+    let lampiranUrl = null;
+    const lampiranFile = findFileInBody(body, ['lampiran_cuti', 'lampiran', 'lampiran_file', 'file']);
+    if (lampiranFile) {
+      try {
+        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
+        lampiranUrl = res.publicUrl || null;
+        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+      } catch (e) {
+        return NextResponse.json({ ok: false, message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+      }
+    }
+
     const pengajuan = await db.$transaction(async (tx) => {
       const created = await tx.pengajuanCuti.create({
         data: {
@@ -347,6 +364,7 @@ export async function POST(req) {
           tanggal_masuk_kerja,
           handover,
           jenis_pengajuan,
+          lampiran_cuti_url: lampiranUrl,
         },
       });
 
@@ -444,6 +462,7 @@ export async function POST(req) {
       ok: true,
       message: 'Pengajuan cuti berhasil dibuat.',
       data: fullPengajuan ?? pengajuan,
+      upload: uploadMeta || undefined,
     });
   } catch (err) {
     console.error('POST /mobile/pengajuan-cuti error:', err);

@@ -4,6 +4,8 @@ import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, parseDateTimeToUTC, startOfUTCDay, endOfUTCDay } from '@/helpers/date-helper';
 import { sendNotification } from '@/app/utils/services/notificationService';
+import storageClient from '@/app/api/_utils/storageClient';
+import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -305,7 +307,8 @@ export async function POST(req) {
   }
 
   try {
-    const body = await req.json();
+    const parsed = await parseRequestBody(req);
+    const body = parsed.body || {};
 
     const tanggalIzin = parseDateOnlyToUTC(body.tanggal_izin);
     if (!tanggalIzin) {
@@ -350,7 +353,21 @@ export async function POST(req) {
 
     const keperluan = isNullLike(body.keperluan) ? null : String(body.keperluan).trim();
     const handover = isNullLike(body.handover) ? null : String(body.handover).trim();
-    const lampiran = normalizeLampiranInput(body.lampiran_izin_jam_url ?? body.lampiran_url ?? body.lampiran);
+    let uploadMeta = null;
+    let lampiranUrl = null;
+    const lampiranFile = findFileInBody(body, ['lampiran_izin_jam', 'lampiran', 'lampiran_file', 'file']);
+    if (lampiranFile) {
+      try {
+        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
+        lampiranUrl = res.publicUrl || null;
+        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+      } catch (e) {
+        return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+      }
+    } else {
+      const fallback = normalizeLampiranInput(body.lampiran_izin_jam_url ?? body.lampiran_url ?? body.lampiran);
+      lampiranUrl = fallback ?? null;
+    }
     let tanggalPengganti = null;
     if (Object.prototype.hasOwnProperty.call(body, 'tanggal_pengganti')) {
       if (!isNullLike(body.tanggal_pengganti)) {
@@ -428,7 +445,7 @@ export async function POST(req) {
           id_kategori_izin_jam: idKategoriIzinJam,
           keperluan,
           handover,
-          lampiran_izin_jam_url: lampiran ?? null,
+          lampiran_izin_jam_url: lampiranUrl,
           status: statusRaw,
           current_level: currentLevel,
           jenis_pengajuan,
@@ -559,7 +576,7 @@ export async function POST(req) {
       }
     }
 
-    return NextResponse.json({ message: 'Pengajuan izin jam berhasil dibuat.', data: result }, { status: 201 });
+    return NextResponse.json({ message: 'Pengajuan izin jam berhasil dibuat.', data: result, upload: uploadMeta || undefined }, { status: 201 });
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err?.code === 'P2003') {

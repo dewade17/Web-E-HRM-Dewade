@@ -950,6 +950,7 @@ model IzinTukarHari {
   kategori           String        @db.VarChar(255)
   keperluan          String?       @db.LongText
   handover           String?       @db.LongText
+  lampiran_izin_tukar_hari_url String?       @db.LongText
   status             ApproveStatus @default(pending)
   current_level      Int?
   jenis_pengajuan    String        @db.VarChar(32)

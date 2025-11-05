@@ -3,6 +3,8 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { sendNotification } from '@/app/utils/services/notificationService';
+import storageClient from '@/app/api/_utils/storageClient';
+import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -234,7 +236,8 @@ export async function POST(req) {
   }
 
   try {
-    const body = await req.json();
+    const parsed = await parseRequestBody(req);
+    const body = parsed.body || {};
 
     const kategoriIdRaw = body.id_kategori_sakit ?? body.id_kategori ?? body.kategori;
     const kategoriId = kategoriIdRaw ? String(kategoriIdRaw).trim() : '';
@@ -248,7 +251,23 @@ export async function POST(req) {
     }
 
     const handover = isNullLike(body.handover) ? null : String(body.handover).trim();
-    const lampiran = normalizeLampiranInput(body.lampiran_izin_sakit_url ?? body.lampiran_url ?? body.lampiran ?? body.lampiran_izin);
+    let uploadMeta = null;
+    let lampiranUrl = null;
+    const lampiranFile = findFileInBody(body, ['lampiran_izin_sakit', 'lampiran', 'lampiran_file', 'file', 'lampiran_izin']);
+    if (lampiranFile) {
+      try {
+        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
+        lampiranUrl = res.publicUrl || null;
+        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+      } catch (e) {
+        return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+      }
+    } else {
+      const fallback = normalizeLampiranInput(
+        body.lampiran_izin_sakit_url ?? body.lampiran_url ?? body.lampiran ?? body.lampiran_izin
+      );
+      lampiranUrl = fallback ?? null;
+    }
 
     const statusRaw = body.status ? String(body.status).trim().toLowerCase() : 'pending';
     if (statusRaw && !APPROVE_STATUSES.has(statusRaw)) {
@@ -294,7 +313,7 @@ export async function POST(req) {
           id_user: targetUserId,
           id_kategori_sakit: kategoriId,
           handover,
-          lampiran_izin_sakit_url: lampiran ?? null,
+          lampiran_izin_sakit_url: lampiranUrl,
           status: statusRaw,
           current_level: currentLevel,
           jenis_pengajuan,
@@ -408,7 +427,7 @@ export async function POST(req) {
       }
     }
 
-    return NextResponse.json({ message: 'Pengajuan izin sakit berhasil dibuat.', data: result }, { status: 201 });
+    return NextResponse.json({ message: 'Pengajuan izin sakit berhasil dibuat.', data: result, upload: uploadMeta || undefined }, { status: 201 });
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err?.code === 'P2003') {

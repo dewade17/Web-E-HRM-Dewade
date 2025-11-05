@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { ensureAuth, parseTagUserIds } from '../route';
+import storageClient from '@/app/api/_utils/storageClient';
+import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -120,7 +122,8 @@ export async function PUT(req, { params }) {
       return NextResponse.json({ message: 'Forbidden.' }, { status: 403 });
     }
 
-    const body = await req.json();
+    const parsed = await parseRequestBody(req);
+    const body = parsed.body || {};
     const data = {};
 
     if (Object.prototype.hasOwnProperty.call(body, 'id_user')) {
@@ -186,18 +189,26 @@ export async function PUT(req, { params }) {
       }
     }
 
-    if (
-      Object.prototype.hasOwnProperty.call(body, 'lampiran_izin_sakit_url') ||
-      Object.prototype.hasOwnProperty.call(body, 'lampiran_url') ||
-      Object.prototype.hasOwnProperty.call(body, 'lampiran') ||
-      Object.prototype.hasOwnProperty.call(body, 'lampiran_izin')
-    ) {
-      const lampiran = normalizeLampiranInput(body.lampiran_izin_sakit_url ?? body.lampiran_url ?? body.lampiran ?? body.lampiran_izin);
-      if (lampiran === undefined) {
-        data.lampiran_izin_sakit_url = pengajuan.lampiran_izin_sakit_url;
-      } else {
-        data.lampiran_izin_sakit_url = lampiran;
+    let uploadMeta = null;
+    const newFile = findFileInBody(body, ['lampiran_izin_sakit', 'lampiran', 'lampiran_file', 'file', 'lampiran_izin']);
+    if (newFile) {
+      try {
+        const res = await storageClient.uploadBufferWithPresign(newFile, { folder: 'pengajuan' });
+        data.lampiran_izin_sakit_url = res.publicUrl || null;
+        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+      } catch (e) {
+        return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
       }
+    } else if (
+      hasOwn(body, 'lampiran_izin_sakit_url') ||
+      hasOwn(body, 'lampiran_url') ||
+      hasOwn(body, 'lampiran') ||
+      hasOwn(body, 'lampiran_izin')
+    ) {
+      const lampiran = normalizeLampiranInput(
+        body.lampiran_izin_sakit_url ?? body.lampiran_url ?? body.lampiran ?? body.lampiran_izin
+      );
+      data.lampiran_izin_sakit_url = lampiran;
     }
 
     const tagUserIds = parseTagUserIds(body.tag_user_ids ?? body.handover_user_ids);
@@ -251,7 +262,7 @@ export async function PUT(req, { params }) {
       });
     });
 
-    return NextResponse.json({ message: 'Pengajuan izin sakit berhasil diperbarui.', data: updated });
+    return NextResponse.json({ message: 'Pengajuan izin sakit berhasil diperbarui.', data: updated, upload: uploadMeta || undefined });
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err?.code === 'P2003') {
