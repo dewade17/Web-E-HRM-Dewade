@@ -209,8 +209,8 @@ model PolaKerja {
 model ShiftKerja {
   id_shift_kerja  String      @id @default(uuid()) @db.Char(36)
   id_user         String      @db.Char(36)
-  tanggal_mulai   DateTime?   @db.Date
-  tanggal_selesai DateTime?   @db.Date
+  tanggal_mulai   DateTime    @db.Date
+  tanggal_selesai DateTime    @db.Date
   hari_kerja      String
   status          ShiftStatus
   id_pola_kerja   String?     @db.Char(36)
@@ -222,6 +222,7 @@ model ShiftKerja {
   user      User       @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
   polaKerja PolaKerja? @relation(fields: [id_pola_kerja], references: [id_pola_kerja], onDelete: Restrict, onUpdate: Cascade)
 
+  @@unique([id_user, tanggal_mulai], name: "uniq_shift_per_user_per_date")
   @@index([id_user, tanggal_mulai])
   @@index([id_pola_kerja])
   @@map("shift_kerja")
