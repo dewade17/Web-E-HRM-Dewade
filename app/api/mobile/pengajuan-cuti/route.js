@@ -316,7 +316,8 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja tidak boleh sebelum tanggal_mulai.' }, { status: 400 });
     }
 
-    const handoverIds = sanitizeHandoverIds(body?.handover_tag_user_ids);
+    const handoverIdsInput = body?.['handover_tag_user_ids[]'] ?? body?.handover_tag_user_ids;
+    const handoverIds = sanitizeHandoverIds(handoverIdsInput);
     if (handoverIds === null) {
       return NextResponse.json({ ok: false, message: 'handover_tag_user_ids harus berupa array.' }, { status: 400 });
     }

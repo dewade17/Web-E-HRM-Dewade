@@ -65,9 +65,7 @@ function normalizeBodyString(value) {
   return String(value);
 }
 
-function hasOwn(obj, key) {
-  return Object.prototype.hasOwnProperty.call(obj, key);
-}
+
 
 async function handleUpdate(req, params) {
   const auth = await ensureAuth(req);

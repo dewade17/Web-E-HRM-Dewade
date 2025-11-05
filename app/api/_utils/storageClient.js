@@ -47,7 +47,7 @@ function guessExt(filename) {
 
 function isFileLike(value) {
   // Works for Web File and simple test doubles
-  return value && typeof value === 'object' && typeof value.arrayBuffer === 'function' && ('size' in value);
+  return value && typeof value === 'object' && typeof value.arrayBuffer === 'function' && 'size' in value;
 }
 
 export function createStorageClient(opts = {}) {
@@ -56,37 +56,53 @@ export function createStorageClient(opts = {}) {
   return {
     baseURL,
 
-    async createUpload({ mime, ext, folder = 'pengajuan', metadata } = {}) {
-      const res = await fetch(
-        joinUrl(baseURL, '/api/storage/create-upload'),
-        {
-          method: 'POST',
-          headers: apiHeaders(),
-          body: JSON.stringify({ mime, ext, folder, metadata }),
+    async createUpload({ mime, ext, folder = 'pengajuan', isPublic = true, checksum, expiresIn, metadata } = {}) {
+      // Build request body dynamically to allow optional fields.
+      // The storage API accepts isPublic (boolean) at the top level, along with optional checksum and expiresIn.
+      const body = { mime, ext, folder };
+      if (isPublic !== undefined) body.isPublic = isPublic;
+      if (checksum) body.checksum = checksum;
+      if (expiresIn) body.expiresIn = expiresIn;
+
+      // Preserve legacy metadata for gateways that support it. If metadata contains its own
+      // isPublic value and no explicit isPublic was provided, prefer metadata.isPublic.
+      if (metadata) {
+        if (metadata.isPublic !== undefined && isPublic === undefined) {
+          body.isPublic = metadata.isPublic;
         }
-      );
+        body.metadata = metadata;
+      }
+
+      const res = await fetch(joinUrl(baseURL, '/api/storage/create-upload'), {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify(body),
+      });
       const json = await toJsonOrThrow(res, 'Gagal membuat upload URL.');
+
       // Normalize keys from various gateways
       const uploadUrl = json.uploadUrl || json.url || json.upload_url;
       const key = json.key || json.objectKey || json.object_key;
       const headers = json.uploadHeaders || json.headers || {};
+      const publicUrl = json.publicUrl || json.public_url || json.url || null;
+      const expires = json.expiresIn || json.expires_in || null;
+
       if (!uploadUrl || !key) {
         const err = new Error('Respon create-upload tidak lengkap.');
         err.payload = json;
         throw err;
       }
-      return { uploadUrl, key, headers };
+      // Return the pre-signed upload URL, object key, any additional headers,
+      // and, if provided, the public URL and expiry for convenience.
+      return { uploadUrl, key, headers, publicUrl, expiresIn: expires };
     },
 
     async confirmUpload({ key, etag, size }) {
-      const res = await fetch(
-        joinUrl(baseURL, '/api/storage/confirm'),
-        {
-          method: 'POST',
-          headers: apiHeaders(),
-          body: JSON.stringify({ key, etag, size }),
-        }
-      );
+      const res = await fetch(joinUrl(baseURL, '/api/storage/confirm'), {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ key, etag, size }),
+      });
       const json = await toJsonOrThrow(res, 'Gagal konfirmasi upload.');
       // Normalize public URL key
       const publicUrl = json.publicUrl || json.public_url || json.url;
@@ -94,18 +110,15 @@ export function createStorageClient(opts = {}) {
     },
 
     async createDownload({ key, expiresIn }) {
-      const res = await fetch(
-        joinUrl(baseURL, '/api/storage/create-download'),
-        {
-          method: 'POST',
-          headers: apiHeaders(),
-          body: JSON.stringify({ key, expiresIn }),
-        }
-      );
+      const res = await fetch(joinUrl(baseURL, '/api/storage/create-download'), {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ key, expiresIn }),
+      });
       return toJsonOrThrow(res, 'Gagal membuat download URL.');
     },
 
-    async uploadBufferWithPresign(fileOrBlob, { folder = 'pengajuan', baseURL: overrideBaseURL } = {}) {
+    async uploadBufferWithPresign(fileOrBlob, { folder = 'pengajuan', isPublic = true, expiresIn, baseURL: overrideBaseURL } = {}) {
       if (!isFileLike(fileOrBlob)) {
         throw new Error('File tidak valid untuk diunggah.');
       }
@@ -116,7 +129,9 @@ export function createStorageClient(opts = {}) {
 
       const client = overrideBaseURL ? createStorageClient({ baseURL: overrideBaseURL }) : this;
 
-      const { uploadUrl, key, headers } = await client.createUpload({ mime, ext, folder });
+      // Request a pre-signed upload URL. Pass through isPublic and expiresIn so that
+      // callers can control the visibility and expiration of the uploaded object.
+      const { uploadUrl, key, headers, publicUrl: presignedPublicUrl } = await client.createUpload({ mime, ext, folder, isPublic, expiresIn });
 
       const buffer = Buffer.from(await file.arrayBuffer());
       const uploadRes = await fetch(uploadUrl, {
@@ -138,7 +153,10 @@ export function createStorageClient(opts = {}) {
       const size = typeof file.size === 'number' ? file.size : buffer.length;
 
       const confirmed = await client.confirmUpload({ key, etag, size });
-      const publicUrl = confirmed.publicUrl || confirmed.url || null;
+      // Determine the final public URL. Prefer the URL returned by confirmUpload,
+      // but fall back to the pre‑signed public URL (if provided) when confirmation
+      // does not include one (some gateways may omit publicUrl on confirm).
+      const publicUrl = confirmed.publicUrl || confirmed.url || presignedPublicUrl || null;
 
       return { key, publicUrl, etag, size, raw: confirmed };
     },
@@ -148,4 +166,3 @@ export function createStorageClient(opts = {}) {
 // Default singleton client using env configuration
 const defaultClient = createStorageClient();
 export default defaultClient;
-
