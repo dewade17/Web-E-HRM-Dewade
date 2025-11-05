@@ -750,6 +750,18 @@ model KategoriSakit {
   @@map("kategori_sakit")
 }
 
+model KategoriIzinJam {
+  id_kategori_izin_jam String    @id @default(uuid()) @db.Char(36)
+  nama_kategori        String    @db.VarChar(255)
+  created_at           DateTime  @default(now()) @db.DateTime(0)
+  updated_at           DateTime  @updatedAt @db.DateTime(0)
+  deleted_at           DateTime? @db.DateTime(0)
+
+  pengajuan_izin_jam PengajuanIzinJam[]
+
+  @@map("kategori_izin_jam")
+}
+
 model CutiKonfigurasi {
   id_cuti_konfigurasi String @id @default(uuid()) @db.Char(36)
   id_user             String @db.Char(36)
@@ -877,10 +889,13 @@ model ApprovalIzinSakit {
 model PengajuanIzinJam {
   id_pengajuan_izin_jam String        @id @default(uuid()) @db.Char(36)
   id_user               String        @db.Char(36)
+  id_kategori_izin_jam  String        @db.Char(36)
   tanggal_izin          DateTime      @db.Date
   jam_mulai             DateTime      @db.DateTime(0)
   jam_selesai           DateTime      @db.DateTime(0)
-  kategori              String        @db.VarChar(255)
+  tanggal_pengganti     DateTime?     @db.Date
+  jam_mulai_pengganti   DateTime?     @db.DateTime(0)
+  jam_selesai_pengganti DateTime?     @db.DateTime(0)
   keperluan             String?       @db.LongText
   handover              String?       @db.LongText
   lampiran_izin_jam_url String?       @db.LongText
@@ -893,10 +908,12 @@ model PengajuanIzinJam {
   deleted_at DateTime? @db.DateTime(0)
 
   user           User                       @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
+  kategori       KategoriIzinJam            @relation(fields: [id_kategori_izin_jam], references: [id_kategori_izin_jam], onDelete: Restrict, onUpdate: Cascade) // <-- BARU: Relasi
   approvals      ApprovalPengajuanIzinJam[]
   handover_users HandoverIzinJam[]
 
   @@index([id_user, tanggal_izin])
+  @@index([id_kategori_izin_jam])
   @@map("pengajuan_izin_jam")
 }
 
