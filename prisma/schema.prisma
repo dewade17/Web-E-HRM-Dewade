@@ -37,7 +37,6 @@ enum ApproveStatus {
   disetujui
   ditolak
   pending
-  menunggu // Ditambahkan dari diagram Cuti
 }
 
 enum WorkStatus {

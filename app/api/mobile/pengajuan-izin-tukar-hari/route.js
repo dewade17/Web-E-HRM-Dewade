@@ -5,7 +5,7 @@ import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, startOfUTCDay, endOfUTCDay } from '@/helpers/date-helper';
 import { sendNotification } from '@/app/utils/services/notificationService';
 import { parseRequestBody } from '@/app/api/_utils/requestBody';
-import { extractApprovalsFromBody, validateApprovalEntries } from '@/app/api/mobile/_utils/approvalValidation';
+import { extractApprovalsFromBody, validateApprovalEntries } from '@/app/api/mobile/pengajuan-izin-tukar-hari/_utils/approvalValidation';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
