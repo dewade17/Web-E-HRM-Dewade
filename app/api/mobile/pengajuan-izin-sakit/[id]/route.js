@@ -3,6 +3,7 @@ import db from '@/lib/prisma';
 import { ensureAuth, parseTagUserIds } from '../route';
 import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
+import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -126,6 +127,21 @@ export async function PUT(req, { params }) {
     const body = parsed.body || {};
     const data = {};
 
+    if (hasOwn(body, 'tanggal_pengajuan')) {
+      const rawTanggalPengajuan = body.tanggal_pengajuan;
+      if (rawTanggalPengajuan === undefined) {
+        // Skip update when explicitly undefined
+      } else if (isNullLike(rawTanggalPengajuan)) {
+        data.tanggal_pengajuan = null;
+      } else {
+        const parsedTanggal = parseDateOnlyToUTC(rawTanggalPengajuan);
+        if (!parsedTanggal) {
+          return NextResponse.json({ message: "Field 'tanggal_pengajuan' harus berupa tanggal valid dengan format YYYY-MM-DD." }, { status: 400 });
+        }
+        data.tanggal_pengajuan = parsedTanggal;
+      }
+    }
+
     if (Object.prototype.hasOwnProperty.call(body, 'id_user')) {
       const nextId = String(body.id_user || '').trim();
       if (!nextId) {
@@ -199,15 +215,8 @@ export async function PUT(req, { params }) {
       } catch (e) {
         return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
       }
-    } else if (
-      hasOwn(body, 'lampiran_izin_sakit_url') ||
-      hasOwn(body, 'lampiran_url') ||
-      hasOwn(body, 'lampiran') ||
-      hasOwn(body, 'lampiran_izin')
-    ) {
-      const lampiran = normalizeLampiranInput(
-        body.lampiran_izin_sakit_url ?? body.lampiran_url ?? body.lampiran ?? body.lampiran_izin
-      );
+    } else if (hasOwn(body, 'lampiran_izin_sakit_url') || hasOwn(body, 'lampiran_url') || hasOwn(body, 'lampiran') || hasOwn(body, 'lampiran_izin')) {
+      const lampiran = normalizeLampiranInput(body.lampiran_izin_sakit_url ?? body.lampiran_url ?? body.lampiran ?? body.lampiran_izin);
       data.lampiran_izin_sakit_url = lampiran;
     }
 

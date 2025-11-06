@@ -5,6 +5,7 @@ import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { sendNotification } from '@/app/utils/services/notificationService';
 import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
+import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -239,6 +240,20 @@ export async function POST(req) {
     const parsed = await parseRequestBody(req);
     const body = parsed.body || {};
 
+    const rawTanggalPengajuan = body.tanggal_pengajuan;
+    let tanggalPengajuan;
+    if (rawTanggalPengajuan === undefined) {
+      tanggalPengajuan = undefined;
+    } else if (isNullLike(rawTanggalPengajuan)) {
+      tanggalPengajuan = null;
+    } else {
+      const parsedTanggal = parseDateOnlyToUTC(rawTanggalPengajuan);
+      if (!parsedTanggal) {
+        return NextResponse.json({ message: "Field 'tanggal_pengajuan' harus berupa tanggal valid dengan format YYYY-MM-DD." }, { status: 400 });
+      }
+      tanggalPengajuan = parsedTanggal;
+    }
+
     const kategoriIdRaw = body.id_kategori_sakit ?? body.id_kategori ?? body.kategori;
     const kategoriId = kategoriIdRaw ? String(kategoriIdRaw).trim() : '';
     if (!kategoriId) {
@@ -263,9 +278,7 @@ export async function POST(req) {
         return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
       }
     } else {
-      const fallback = normalizeLampiranInput(
-        body.lampiran_izin_sakit_url ?? body.lampiran_url ?? body.lampiran ?? body.lampiran_izin
-      );
+      const fallback = normalizeLampiranInput(body.lampiran_izin_sakit_url ?? body.lampiran_url ?? body.lampiran ?? body.lampiran_izin);
       lampiranUrl = fallback ?? null;
     }
 
@@ -317,6 +330,7 @@ export async function POST(req) {
           status: statusRaw,
           current_level: currentLevel,
           jenis_pengajuan,
+          ...(tanggalPengajuan !== undefined ? { tanggal_pengajuan: tanggalPengajuan } : {}),
         },
       });
 
