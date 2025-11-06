@@ -8,6 +8,7 @@ import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 import { sendNotification } from '@/app/utils/services/notificationService';
 import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
+import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from './_utils/approvals';
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
 
@@ -37,6 +38,19 @@ const pengajuanInclude = {
           foto_profil_user: true,
         },
       },
+    },
+  },
+  approvals: {
+    where: { deleted_at: null },
+    orderBy: { level: 'asc' },
+    select: {
+      id_approval_pengajuan_cuti: true,
+      level: true,
+      approver_user_id: true,
+      approver_role: true,
+      decision: true,
+      decided_at: true,
+      note: true,
     },
   },
 };
@@ -359,6 +373,22 @@ export async function POST(req) {
         return NextResponse.json({ ok: false, message: 'Beberapa handover_tag_user_ids tidak valid.' }, { status: 400 });
       }
     }
+    let approvalsInput;
+    try {
+      approvalsInput = parseApprovalsFromBody(body);
+    } catch (err) {
+      const status = err?.status || 400;
+      return NextResponse.json({ ok: false, message: err?.message || 'Data approvals tidak valid.' }, { status });
+    }
+
+    try {
+      if (approvalsInput !== undefined) {
+        await ensureApprovalUsersExist(db, approvalsInput);
+      }
+    } catch (err) {
+      const status = err?.status || 400;
+      return NextResponse.json({ ok: false, message: err?.message || 'Approver tidak valid.' }, { status });
+    }
 
     let uploadMeta = null;
     let lampiranUrl = null;
@@ -386,6 +416,10 @@ export async function POST(req) {
           lampiran_cuti_url: lampiranUrl,
         },
       });
+
+      if (approvalsInput !== undefined) {
+        await syncApprovalRecords(tx, created.id_pengajuan_cuti, approvalsInput);
+      }
 
       if (handoverIds && handoverIds.length) {
         await tx.handoverCuti.createMany({

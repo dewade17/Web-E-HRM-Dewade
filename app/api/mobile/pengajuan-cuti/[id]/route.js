@@ -6,6 +6,7 @@ import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 import { ensureAuth, pengajuanInclude, sanitizeHandoverIds, normalizeStatus } from '../route';
 import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody, hasOwn, isNullLike } from '@/app/api/_utils/requestBody';
+import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from '../_utils/approvals';
 
 async function getPengajuanOrError(id) {
   return db.pengajuanCuti.findUnique({
@@ -64,8 +65,6 @@ function normalizeBodyString(value) {
   if (value === undefined || value === null) return null;
   return String(value);
 }
-
-
 
 async function handleUpdate(req, params) {
   const auth = await ensureAuth(req);
@@ -182,6 +181,25 @@ async function handleUpdate(req, params) {
       }
     }
 
+    let approvalsInput;
+    let shouldSyncApprovals = false;
+    try {
+      approvalsInput = parseApprovalsFromBody(body);
+      shouldSyncApprovals = approvalsInput !== undefined;
+    } catch (err) {
+      const status = err?.status || 400;
+      return NextResponse.json({ ok: false, message: err?.message || 'Data approvals tidak valid.' }, { status });
+    }
+
+    try {
+      if (shouldSyncApprovals) {
+        await ensureApprovalUsersExist(db, approvalsInput);
+      }
+    } catch (err) {
+      const status = err?.status || 400;
+      return NextResponse.json({ ok: false, message: err?.message || 'Approver tidak valid.' }, { status });
+    }
+
     const finalTanggalMulai = tanggalMulaiBaru ?? pengajuan.tanggal_mulai;
     const finalTanggalMasuk = tanggalMasukBaru ?? pengajuan.tanggal_masuk_kerja;
     if (finalTanggalMasuk && finalTanggalMulai && finalTanggalMasuk < finalTanggalMulai) {
@@ -191,7 +209,7 @@ async function handleUpdate(req, params) {
     const hasUpdate = Object.keys(updateData).length > 0;
     const shouldSyncHandover = handoverIds !== undefined;
 
-    if (!hasUpdate && !shouldSyncHandover) {
+    if (!hasUpdate && !shouldSyncHandover && !shouldSyncApprovals) {
       return NextResponse.json({ ok: false, message: 'Tidak ada perubahan yang diberikan.' }, { status: 400 });
     }
 
@@ -214,6 +232,10 @@ async function handleUpdate(req, params) {
             skipDuplicates: true,
           });
         }
+      }
+
+      if (shouldSyncApprovals) {
+        await syncApprovalRecords(tx, id, approvalsInput);
       }
 
       return tx.pengajuanCuti.findUnique({

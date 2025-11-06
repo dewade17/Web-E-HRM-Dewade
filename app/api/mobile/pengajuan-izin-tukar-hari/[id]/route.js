@@ -4,6 +4,7 @@ import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 import { parseRequestBody, isNullLike } from '@/app/api/_utils/requestBody';
+import { extractApprovalsFromBody, normalizeApprovalRole, validateApprovalEntries } from '@/app/api/mobile/_utils/approvalValidation';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -237,7 +238,7 @@ export async function PUT(req, { params }) {
     if (tagUserIds !== undefined) {
       await validateTaggedUsers(tagUserIds);
     }
-
+    const approvalsInput = extractApprovalsFromBody(body);
     const updated = await db.$transaction(async (tx) => {
       const saved = await tx.izinTukarHari.update({
         where: { id_izin_tukar_hari: pengajuan.id_izin_tukar_hari },
@@ -270,6 +271,62 @@ export async function PUT(req, { params }) {
 
           if (toCreate.length) {
             await tx.handoverTukarHari.createMany({ data: toCreate, skipDuplicates: true });
+          }
+        }
+      }
+
+      if (approvalsInput !== undefined) {
+        const approvals = await validateApprovalEntries(approvalsInput, tx);
+        const existingApprovals = await tx.approvalIzinTukarHari.findMany({
+          where: { id_izin_tukar_hari: saved.id_izin_tukar_hari, deleted_at: null },
+          select: {
+            id_approval_izin_tukar_hari: true,
+            level: true,
+            approver_user_id: true,
+            approver_role: true,
+          },
+        });
+
+        const existingMap = new Map(existingApprovals.map((item) => [item.id_approval_izin_tukar_hari, item]));
+        const incomingIds = new Set(approvals.filter((item) => item.id).map((item) => item.id));
+
+        const toDelete = existingApprovals.filter((item) => !incomingIds.has(item.id_approval_izin_tukar_hari)).map((item) => item.id_approval_izin_tukar_hari);
+        if (toDelete.length) {
+          await tx.approvalIzinTukarHari.deleteMany({
+            where: { id_approval_izin_tukar_hari: { in: toDelete } },
+          });
+        }
+
+        for (const approval of approvals) {
+          if (approval.id && existingMap.has(approval.id)) {
+            const current = existingMap.get(approval.id);
+            const sameLevel = current.level === approval.level;
+            const sameUser = (current.approver_user_id || null) === approval.approver_user_id;
+            const sameRole = normalizeApprovalRole(current.approver_role) === normalizeApprovalRole(approval.approver_role);
+
+            if (!sameLevel || !sameUser || !sameRole) {
+              await tx.approvalIzinTukarHari.update({
+                where: { id_approval_izin_tukar_hari: approval.id },
+                data: {
+                  level: approval.level,
+                  approver_user_id: approval.approver_user_id,
+                  approver_role: approval.approver_role,
+                  decision: 'pending',
+                  decided_at: null,
+                  note: null,
+                },
+              });
+            }
+          } else {
+            await tx.approvalIzinTukarHari.create({
+              data: {
+                id_izin_tukar_hari: saved.id_izin_tukar_hari,
+                level: approval.level,
+                approver_user_id: approval.approver_user_id,
+                approver_role: approval.approver_role,
+                decision: 'pending',
+              },
+            });
           }
         }
       }

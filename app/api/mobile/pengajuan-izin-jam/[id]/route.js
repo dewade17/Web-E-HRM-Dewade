@@ -5,6 +5,7 @@ import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, parseDateTimeToUTC } from '@/helpers/date-helper';
 import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
+import { readApprovalsFromBody } from '../_utils/approvals';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -180,7 +181,13 @@ export async function PUT(req, { params }) {
 
     const parsed = await parseRequestBody(req);
     const body = parsed.body || {};
-
+    let approvalsInput;
+    try {
+      approvalsInput = readApprovalsFromBody(body);
+    } catch (err) {
+      if (err instanceof NextResponse) return err;
+      throw err;
+    }
     const data = {};
 
     if (Object.prototype.hasOwnProperty.call(body, 'id_user')) {
@@ -347,7 +354,7 @@ export async function PUT(req, { params }) {
     if (tagUserIds !== undefined) {
       await validateTaggedUsers(tagUserIds);
     }
-
+    const existingApprovals = Array.isArray(pengajuan.approvals) ? pengajuan.approvals : [];
     const updated = await db.$transaction(async (tx) => {
       const saved = await tx.pengajuanIzinJam.update({
         where: { id_pengajuan_izin_jam: pengajuan.id_pengajuan_izin_jam },
@@ -381,6 +388,68 @@ export async function PUT(req, { params }) {
           if (toCreate.length) {
             await tx.handoverIzinJam.createMany({ data: toCreate, skipDuplicates: true });
           }
+        }
+      }
+
+      if (approvalsInput !== undefined) {
+        const existingMap = new Map(existingApprovals.map((item) => [item.id_approval_pengajuan_izin_jam, item]));
+        const seenIds = new Set();
+        const toCreate = [];
+        const toUpdate = [];
+
+        approvalsInput.forEach((approval) => {
+          if (approval.id && existingMap.has(approval.id)) {
+            seenIds.add(approval.id);
+            const current = existingMap.get(approval.id);
+            const currentRole = current?.approver_role ? String(current.approver_role).trim().toUpperCase() : null;
+            const currentUser = current?.approver_user_id || null;
+            if (current?.level !== approval.level || currentUser !== (approval.approver_user_id || null) || currentRole !== (approval.approver_role || null)) {
+              toUpdate.push(approval);
+            }
+          } else {
+            toCreate.push(approval);
+          }
+        });
+
+        const toDeleteIds = existingApprovals.filter((item) => !seenIds.has(item.id_approval_pengajuan_izin_jam)).map((item) => item.id_approval_pengajuan_izin_jam);
+
+        if (toDeleteIds.length) {
+          await tx.approvalPengajuanIzinJam.deleteMany({
+            where: {
+              id_pengajuan_izin_jam: saved.id_pengajuan_izin_jam,
+              id_approval_pengajuan_izin_jam: { in: toDeleteIds },
+            },
+          });
+        }
+
+        if (toUpdate.length) {
+          await Promise.all(
+            toUpdate.map((approval) =>
+              tx.approvalPengajuanIzinJam.update({
+                where: { id_approval_pengajuan_izin_jam: approval.id },
+                data: {
+                  level: approval.level,
+                  approver_user_id: approval.approver_user_id,
+                  approver_role: approval.approver_role,
+                  decision: 'pending',
+                  decided_at: null,
+                  note: null,
+                },
+              })
+            )
+          );
+        }
+
+        if (toCreate.length) {
+          await tx.approvalPengajuanIzinJam.createMany({
+            data: toCreate.map((approval) => ({
+              id_pengajuan_izin_jam: saved.id_pengajuan_izin_jam,
+              level: approval.level,
+              approver_user_id: approval.approver_user_id,
+              approver_role: approval.approver_role,
+              decision: 'pending',
+            })),
+          });
         }
       }
 

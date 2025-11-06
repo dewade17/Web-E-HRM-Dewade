@@ -1,55 +1,12 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
-import { ensureAuth, parseTagUserIds } from '../route';
+import { ensureAuth, parseTagUserIds, normalizeApprovals, baseInclude } from '../route';
 import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
-
-const baseInclude = {
-  user: {
-    select: {
-      id_user: true,
-      nama_pengguna: true,
-      email: true,
-      role: true,
-    },
-  },
-  kategori: {
-    select: {
-      id_kategori_sakit: true,
-      nama_kategori: true,
-    },
-  },
-  handover_users: {
-    include: {
-      user: {
-        select: {
-          id_user: true,
-          nama_pengguna: true,
-          email: true,
-          role: true,
-          foto_profil_user: true,
-        },
-      },
-    },
-  },
-  approvals: {
-    where: { deleted_at: null },
-    orderBy: { level: 'asc' },
-    select: {
-      id_approval_izin_sakit: true,
-      level: true,
-      approver_user_id: true,
-      approver_role: true,
-      decision: true,
-      decided_at: true,
-      note: true,
-    },
-  },
-};
 
 const normRole = (role) =>
   String(role || '')
@@ -139,6 +96,7 @@ export async function PUT(req, { params }) {
     const parsed = await parseRequestBody(req);
     const body = parsed.body || {};
     const data = {};
+    const approvalsInput = normalizeApprovals(body);
 
     if (hasOwn(body, 'tanggal_pengajuan')) {
       const rawTanggalPengajuan = body.tanggal_pengajuan;
@@ -238,7 +196,7 @@ export async function PUT(req, { params }) {
       await validateTaggedUsers(tagUserIds);
     }
 
-    if (!Object.keys(data).length && tagUserIds === undefined) {
+    if (!Object.keys(data).length && tagUserIds === undefined && approvalsInput === undefined) {
       return NextResponse.json({ message: 'Tidak ada perubahan yang dilakukan.', data: pengajuan });
     }
 
@@ -275,6 +233,84 @@ export async function PUT(req, { params }) {
           if (toCreate.length) {
             await tx.handoverIzinSakit.createMany({ data: toCreate, skipDuplicates: true });
           }
+        }
+      }
+
+      let approvalsMetadataChanged = false;
+      if (approvalsInput !== undefined) {
+        const nextApprovals = approvalsInput;
+        const existingApprovals = await tx.approvalIzinSakit.findMany({
+          where: { id_pengajuan_izin_sakit: saved.id_pengajuan_izin_sakit, deleted_at: null },
+          select: {
+            id_approval_izin_sakit: true,
+            level: true,
+            approver_user_id: true,
+            approver_role: true,
+          },
+        });
+
+        const existingMap = new Map(existingApprovals.map((item) => [item.id_approval_izin_sakit, item]));
+        const providedIds = new Set(nextApprovals.filter((item) => item.id).map((item) => item.id));
+
+        const toDeleteIds = existingApprovals.filter((item) => !providedIds.has(item.id_approval_izin_sakit)).map((item) => item.id_approval_izin_sakit);
+
+        if (toDeleteIds.length) {
+          approvalsMetadataChanged = true;
+          await tx.approvalIzinSakit.deleteMany({
+            where: {
+              id_pengajuan_izin_sakit: saved.id_pengajuan_izin_sakit,
+              id_approval_izin_sakit: { in: toDeleteIds },
+            },
+          });
+        }
+
+        const toCreate = [];
+
+        for (const approval of nextApprovals) {
+          if (approval.id && existingMap.has(approval.id)) {
+            const current = existingMap.get(approval.id);
+            const nextRole = approval.approver_role ? normRole(approval.approver_role) : null;
+            const currentRole = current.approver_role ? normRole(current.approver_role) : null;
+            const nextUser = approval.approver_user_id || null;
+            const currentUser = current.approver_user_id || null;
+
+            if (current.level !== approval.level || currentUser !== nextUser || currentRole !== nextRole) {
+              approvalsMetadataChanged = true;
+              await tx.approvalIzinSakit.update({
+                where: { id_approval_izin_sakit: approval.id },
+                data: {
+                  level: approval.level,
+                  approver_user_id: approval.approver_user_id,
+                  approver_role: approval.approver_role,
+                  decision: 'pending',
+                  decided_at: null,
+                  note: null,
+                },
+              });
+            }
+          } else {
+            approvalsMetadataChanged = true;
+            toCreate.push({
+              id_pengajuan_izin_sakit: saved.id_pengajuan_izin_sakit,
+              level: approval.level,
+              approver_user_id: approval.approver_user_id,
+              approver_role: approval.approver_role,
+              decision: 'pending',
+              decided_at: null,
+              note: null,
+            });
+          }
+        }
+
+        if (toCreate.length) {
+          await tx.approvalIzinSakit.createMany({ data: toCreate });
+        }
+
+        if (approvalsMetadataChanged) {
+          await tx.pengajuanIzinSakit.update({
+            where: { id_pengajuan_izin_sakit: saved.id_pengajuan_izin_sakit },
+            data: { status: 'pending', current_level: null },
+          });
         }
       }
 

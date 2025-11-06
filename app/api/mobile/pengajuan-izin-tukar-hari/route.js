@@ -5,6 +5,7 @@ import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, startOfUTCDay, endOfUTCDay } from '@/helpers/date-helper';
 import { sendNotification } from '@/app/utils/services/notificationService';
 import { parseRequestBody } from '@/app/api/_utils/requestBody';
+import { extractApprovalsFromBody, validateApprovalEntries } from '@/app/api/mobile/_utils/approvalValidation';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -354,6 +355,7 @@ export async function POST(req) {
     if (!jenisPengajuanResult.ok) {
       return NextResponse.json({ message: jenisPengajuanResult.message }, { status: 400 });
     }
+    const approvalsInput = extractApprovalsFromBody(body);
 
     const jenis_pengajuan = jenisPengajuanResult.value;
     const targetUser = await db.user.findFirst({
@@ -388,7 +390,20 @@ export async function POST(req) {
           skipDuplicates: true,
         });
       }
-
+      if (approvalsInput !== undefined) {
+        const approvals = await validateApprovalEntries(approvalsInput, tx);
+        if (approvals.length) {
+          await tx.approvalIzinTukarHari.createMany({
+            data: approvals.map((item) => ({
+              id_izin_tukar_hari: created.id_izin_tukar_hari,
+              level: item.level,
+              approver_user_id: item.approver_user_id,
+              approver_role: item.approver_role,
+              decision: 'pending',
+            })),
+          });
+        }
+      }
       return tx.izinTukarHari.findUnique({
         where: { id_izin_tukar_hari: created.id_izin_tukar_hari },
         include: baseInclude,
