@@ -9,6 +9,7 @@ import { sendNotification } from '@/app/utils/services/notificationService';
 import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
+const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
 
 const pengajuanInclude = {
   user: {
@@ -45,6 +46,12 @@ const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
   month: 'long',
   year: 'numeric',
 });
+
+const normRole = (role) =>
+  String(role || '')
+    .trim()
+    .toUpperCase();
+const canManageAll = (role) => ADMIN_ROLES.has(normRole(role));
 
 function formatDateISO(value) {
   if (!value) return '-';
@@ -165,7 +172,7 @@ function resolveJenisPengajuan(input, expected) {
 export async function GET(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
-
+  const actorRole = auth.actor?.role;
   const actorId = auth.actor?.id;
   if (!actorId) {
     return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
@@ -195,11 +202,17 @@ export async function GET(req) {
     const tanggalMasukEqParam = searchParams.get('tanggal_masuk_kerja');
     const tanggalMasukFromParam = searchParams.get('tanggal_masuk_kerja_from');
     const tanggalMasukToParam = searchParams.get('tanggal_masuk_kerja_to');
-
+    const targetUserParam = searchParams.get('id_user');
+    const targetUserFilter = targetUserParam ? String(targetUserParam).trim() : '';
     const where = {
       deleted_at: null,
       id_user: actorId,
     };
+    if (!canManageAll(actorRole)) {
+      where.id_user = actorId;
+    } else if (targetUserFilter) {
+      where.id_user = targetUserFilter;
+    }
 
     if (status) where.status = status;
     if (kategoriId) where.id_kategori_cuti = kategoriId;
