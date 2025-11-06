@@ -4,8 +4,7 @@ import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, startOfUTCDay, endOfUTCDay } from '@/helpers/date-helper';
 import { sendNotification } from '@/app/utils/services/notificationService';
-import storageClient from '@/app/api/_utils/storageClient';
-import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
+import { parseRequestBody } from '@/app/api/_utils/requestBody';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -352,19 +351,6 @@ export async function POST(req) {
       return NextResponse.json({ message: 'User tujuan tidak ditemukan.' }, { status: 404 });
     }
 
-    let uploadMeta = null;
-    let lampiranUrl = null;
-    const lampiranFile = findFileInBody(body, ['lampiran_izin_tukar_hari', 'lampiran', 'lampiran_file', 'file']);
-    if (lampiranFile) {
-      try {
-        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
-        lampiranUrl = res.publicUrl || null;
-        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
-      } catch (e) {
-        return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
-      }
-    }
-
     const result = await db.$transaction(async (tx) => {
       const created = await tx.izinTukarHari.create({
         data: {
@@ -374,7 +360,6 @@ export async function POST(req) {
           kategori,
           keperluan,
           handover,
-          lampiran_izin_tukar_hari_url: lampiranUrl,
           status: statusRaw,
           current_level: currentLevel,
           jenis_pengajuan,
@@ -492,7 +477,7 @@ export async function POST(req) {
       }
     }
 
-    return NextResponse.json({ message: 'Pengajuan izin tukar hari berhasil dibuat.', data: result, upload: uploadMeta || undefined }, { status: 201 });
+    return NextResponse.json({ message: 'Pengajuan izin tukar hari berhasil dibuat.', data: result }, { status: 201 });
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err?.code === 'P2003') {
