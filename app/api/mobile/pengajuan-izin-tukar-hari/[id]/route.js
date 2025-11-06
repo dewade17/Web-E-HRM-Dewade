@@ -39,17 +39,6 @@ const normRole = (role) =>
     .toUpperCase();
 const isAdminRole = (role) => ADMIN_ROLES.has(normRole(role));
 
-function isNullLike(value) {
-  if (value === null || value === undefined) return true;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return true;
-    const lowered = trimmed.toLowerCase();
-    if (lowered === 'null' || lowered === 'undefined') return true;
-  }
-  return false;
-}
-
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -248,9 +237,7 @@ export async function PUT(req, { params }) {
         return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
       }
     } else if (hasOwn(body, 'lampiran_izin_tukar_hari_url')) {
-      data.lampiran_izin_tukar_hari_url = isNullLike(body.lampiran_izin_tukar_hari_url)
-        ? null
-        : String(body.lampiran_izin_tukar_hari_url).trim();
+      data.lampiran_izin_tukar_hari_url = isNullLike(body.lampiran_izin_tukar_hari_url) ? null : String(body.lampiran_izin_tukar_hari_url).trim();
     }
 
     const updated = await db.$transaction(async (tx) => {
