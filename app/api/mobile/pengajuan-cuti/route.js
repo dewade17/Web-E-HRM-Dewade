@@ -9,6 +9,7 @@ import { sendNotification } from '@/app/utils/services/notificationService';
 import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from './_utils/approvals';
+
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
 
@@ -150,12 +151,7 @@ function parseDateQuery(value) {
 
 function sanitizeHandoverIds(ids) {
   if (ids === undefined) return undefined;
-
-  // --- PERBAIKAN LOGIKA ---
-  // Ubah input tunggal (string) menjadi array
   const arr = Array.isArray(ids) ? ids : [ids];
-  // --- AKHIR PERBAIKAN ---
-
   const unique = new Set();
   for (const raw of arr) {
     const val = String(raw || '').trim();
@@ -179,18 +175,16 @@ function resolveJenisPengajuan(input, expected) {
       message: `jenis_pengajuan harus bernilai '${expected}'.`,
     };
   }
-
   return { ok: true, value: fallback };
 }
 
+/* ============================ GET ============================ */
 export async function GET(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
   const actorRole = auth.actor?.role;
   const actorId = auth.actor?.id;
-  if (!actorId) {
-    return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
-  }
+  if (!actorId) return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
 
   try {
     const { searchParams } = new URL(req.url);
@@ -216,19 +210,30 @@ export async function GET(req) {
     const tanggalMasukEqParam = searchParams.get('tanggal_masuk_kerja');
     const tanggalMasukFromParam = searchParams.get('tanggal_masuk_kerja_from');
     const tanggalMasukToParam = searchParams.get('tanggal_masuk_kerja_to');
+
     const targetUserParam = searchParams.get('id_user');
     const targetUserFilter = targetUserParam ? String(targetUserParam).trim() : '';
-    const where = {
-      deleted_at: null,
-      id_user: actorId,
-    };
+
+    // --- FIX 1: jangan kunci id_user ke actorId untuk admin ---
+    const where = { deleted_at: null, jenis_pengajuan: 'cuti' };
+
     if (!canManageAll(actorRole)) {
+      // non-admin hanya lihat data sendiri
       where.id_user = actorId;
     } else if (targetUserFilter) {
+      // admin bisa filter user tertentu
       where.id_user = targetUserFilter;
     }
 
-    if (status) where.status = status;
+    // --- FIX 2: pending/menunggu dianggap sinonim ---
+    if (status) {
+      if (status === 'pending' || status === 'menunggu') {
+        where.status = { in: ['pending', 'menunggu'] };
+      } else {
+        where.status = status; // 'disetujui' | 'ditolak'
+      }
+    }
+
     if (kategoriId) where.id_kategori_cuti = kategoriId;
 
     if (tanggalMulaiEqParam) {
@@ -300,6 +305,7 @@ export async function GET(req) {
   }
 }
 
+/* ============================ POST ============================ */
 export async function POST(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -324,6 +330,7 @@ export async function POST(req) {
     const tanggal_masuk_raw = body?.tanggal_masuk_kerja;
     const keperluan = body?.keperluan === undefined || body?.keperluan === null ? null : String(body.keperluan);
     const handover = body?.handover === undefined || body?.handover === null ? null : String(body.handover);
+
     const jenisPengajuanResult = resolveJenisPengajuan(body?.jenis_pengajuan, 'cuti');
     if (!jenisPengajuanResult.ok) {
       return NextResponse.json({ ok: false, message: jenisPengajuanResult.message }, { status: 400 });
@@ -350,9 +357,6 @@ export async function POST(req) {
 
     const handoverIdsInput = body?.['handover_tag_user_ids[]'] ?? body?.handover_tag_user_ids;
     const handoverIds = sanitizeHandoverIds(handoverIdsInput);
-    if (handoverIds === null) {
-      return NextResponse.json({ ok: false, message: 'handover_tag_user_ids harus berupa array.' }, { status: 400 });
-    }
 
     const kategori = await db.kategoriCuti.findFirst({
       where: { id_kategori_cuti, deleted_at: null },
@@ -373,6 +377,7 @@ export async function POST(req) {
         return NextResponse.json({ ok: false, message: 'Beberapa handover_tag_user_ids tidak valid.' }, { status: 400 });
       }
     }
+
     let approvalsInput;
     try {
       approvalsInput = parseApprovalsFromBody(body);

@@ -43,6 +43,7 @@ function buildInclude() {
   return {
     ...pengajuanInclude,
     approvals: {
+      where: { deleted_at: null }, // konsisten dengan include lain
       orderBy: { level: 'asc' },
       select: {
         id_approval_pengajuan_cuti: true,
@@ -91,7 +92,6 @@ function formatDateDisplay(value) {
   try {
     return dateDisplayFormatter.format(date);
   } catch (err) {
-    console.warn('Gagal memformat tanggal untuk tampilan:', err);
     return formatDateKey(date);
   }
 }
@@ -107,17 +107,11 @@ function parseReturnShiftPayload(raw) {
   if (!parsedDate) {
     throw NextResponse.json({ ok: false, message: 'return_shift.date wajib berisi tanggal valid (format YYYY-MM-DD).' }, { status: 400 });
   }
-
   if (!idPolaKerjaRaw) {
     throw NextResponse.json({ ok: false, message: 'return_shift.id_pola_kerja wajib diisi saat return_shift dikirim.' }, { status: 400 });
   }
-
   const idPolaKerja = String(idPolaKerjaRaw);
-
-  return {
-    date: parsedDate,
-    idPolaKerja,
-  };
+  return { date: parsedDate, idPolaKerja };
 }
 
 function getShiftOverlapRange(shift, rangeStart, rangeEnd) {
@@ -138,14 +132,10 @@ function getShiftOverlapRange(shift, rangeStart, rangeEnd) {
 }
 
 async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDate, returnShift }) {
-  if (!tx || !userId || !startDate) {
-    return createDefaultShiftSyncResult();
-  }
+  if (!tx || !userId || !startDate) return createDefaultShiftSyncResult();
 
   const leaveStart = toDateOnly(startDate);
-  if (!leaveStart) {
-    return createDefaultShiftSyncResult();
-  }
+  if (!leaveStart) return createDefaultShiftSyncResult();
 
   const rawReturn = toDateOnly(returnDate);
   const leaveEnd = rawReturn && rawReturn > leaveStart ? addDays(rawReturn, -1) : leaveStart;
@@ -155,9 +145,7 @@ async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDat
   for (let cursor = new Date(leaveStart.getTime()); cursor <= effectiveEnd; cursor = addDays(cursor, 1)) {
     affectedDates.push(new Date(cursor.getTime()));
   }
-  if (!affectedDates.length) {
-    affectedDates.push(leaveStart);
-  }
+  if (!affectedDates.length) affectedDates.push(leaveStart);
 
   const existingShifts = await tx.shiftKerja.findMany({
     where: {
@@ -188,10 +176,7 @@ async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDat
       updatedIds.push(shift.id_shift_kerja);
     }
   }
-
-  if (updates.length) {
-    await Promise.all(updates);
-  }
+  if (updates.length) await Promise.all(updates);
 
   const coverage = new Set();
   for (const shift of existingShifts) {
@@ -205,9 +190,7 @@ async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDat
   const missingDates = [];
   for (const date of affectedDates) {
     const key = formatDateKey(date);
-    if (!coverage.has(key)) {
-      missingDates.push(new Date(date.getTime()));
-    }
+    if (!coverage.has(key)) missingDates.push(new Date(date.getTime()));
   }
 
   let createdCount = 0;
@@ -220,7 +203,6 @@ async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDat
       status: 'LIBUR',
       id_pola_kerja: null,
     }));
-
     const createResult = await tx.shiftKerja.createMany({ data, skipDuplicates: true });
     createdCount = createResult?.count ?? data.length;
   }
@@ -249,7 +231,6 @@ async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDat
           id_pola_kerja: returnShiftIdPolaKerja,
         },
       });
-
       returnShiftAdjustment = {
         action: 'updated',
         id_shift_kerja: updated.id_shift_kerja,
@@ -269,7 +250,6 @@ async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDat
           id_pola_kerja: returnShiftIdPolaKerja,
         },
       });
-
       returnShiftAdjustment = {
         action: 'created',
         id_shift_kerja: created.id_shift_kerja,
@@ -279,14 +259,6 @@ async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDat
         tanggal_mulai_display: formatDateDisplay(created.tanggal_mulai),
       };
     }
-
-    console.info('Return shift updated for approved leave', {
-      userId,
-      tanggal_mulai: formatDateKey(effectiveReturnShift),
-      id_pola_kerja: returnShiftIdPolaKerja,
-      action: returnShiftAdjustment?.action,
-      status: 'KERJA',
-    });
   }
 
   return {
@@ -325,6 +297,7 @@ async function handleDecision(req, { params }) {
   }
 
   const note = body?.note === undefined || body?.note === null ? null : String(body.note);
+
   let returnShift;
   try {
     returnShift = parseReturnShiftPayload(body?.return_shift);
@@ -332,6 +305,7 @@ async function handleDecision(req, { params }) {
     if (err instanceof NextResponse) return err;
     throw err;
   }
+
   try {
     const result = await db.$transaction(async (tx) => {
       const approvalRecord = await tx.approvalPengajuanCuti.findUnique({
@@ -361,7 +335,6 @@ async function handleDecision(req, { params }) {
 
       const matchesUser = approvalRecord.approver_user_id && approvalRecord.approver_user_id === actorId;
       const matchesRole = approvalRecord.approver_role && normalizeRole(approvalRecord.approver_role) === actorRole;
-
       if (!matchesUser && !matchesRole) {
         throw NextResponse.json({ ok: false, message: 'Anda tidak memiliki akses untuk approval ini.' }, { status: 403 });
       }
@@ -414,16 +387,19 @@ async function handleDecision(req, { params }) {
 
       let submission;
       let shiftSyncResult = createDefaultShiftSyncResult();
+
       if (Object.keys(parentUpdate).length) {
         submission = await tx.pengajuanCuti.update({
           where: { id_pengajuan_cuti: approvalRecord.id_pengajuan_cuti },
           data: parentUpdate,
           include: buildInclude(),
         });
+
         if (parentUpdate.status === 'disetujui') {
           const targetUserId = submission?.id_user || approvalRecord.pengajuan_cuti?.id_user;
           const tanggalMulai = submission?.tanggal_mulai || approvalRecord.pengajuan_cuti?.tanggal_mulai;
           const tanggalMasukKerja = submission?.tanggal_masuk_kerja || approvalRecord.pengajuan_cuti?.tanggal_masuk_kerja;
+
           try {
             shiftSyncResult = await syncShiftLiburForApprovedLeave(tx, {
               userId: targetUserId,
@@ -433,13 +409,7 @@ async function handleDecision(req, { params }) {
             });
           } catch (shiftErr) {
             console.error('Gagal menyelaraskan shift kerja selama cuti:', shiftErr);
-            throw NextResponse.json(
-              {
-                ok: false,
-                message: 'Terjadi kesalahan saat menyelaraskan jadwal shift pemohon.',
-              },
-              { status: 500 }
-            );
+            throw NextResponse.json({ ok: false, message: 'Terjadi kesalahan saat menyelaraskan jadwal shift pemohon.' }, { status: 500 });
           }
         }
       } else {
@@ -447,7 +417,6 @@ async function handleDecision(req, { params }) {
           where: { id_pengajuan_cuti: approvalRecord.id_pengajuan_cuti },
           include: buildInclude(),
         });
-        return { submission, approval: updatedApproval, shiftSyncResult };
       }
 
       return { submission, approval: updatedApproval, shiftSyncResult };
@@ -468,7 +437,7 @@ async function handleDecision(req, { params }) {
         submission.id_user,
         {
           decision,
-          note: approval?.note || undefined,
+          note: approval?.note || undefined, // kirim catatan ke notifikasi
           approval_level: approval?.level,
           related_table: 'pengajuan_cuti',
           related_id: submission.id_pengajuan_cuti,
@@ -487,8 +456,7 @@ async function handleDecision(req, { params }) {
         .sort((a, b) => a.getTime() - b.getTime());
       const firstDate = sortedDates[0];
       const lastDate = sortedDates[sortedDates.length - 1] || firstDate;
-      const periodeMulai = firstDate ? formatDateKey(firstDate) : undefined;
-      const periodeSelesai = lastDate ? formatDateKey(lastDate) : undefined;
+
       const periodeMulaiDisplay = formatDateDisplay(firstDate);
       const periodeSelesaiDisplay = formatDateDisplay(lastDate);
 
@@ -499,9 +467,9 @@ async function handleDecision(req, { params }) {
         'SHIFT_LEAVE_ADJUSTMENT',
         submission.id_user,
         {
-          periode_mulai: periodeMulai,
+          periode_mulai: firstDate ? formatDateKey(firstDate) : undefined,
           periode_mulai_display: periodeMulaiDisplay,
-          periode_selesai: periodeSelesai,
+          periode_selesai: lastDate ? formatDateKey(lastDate) : undefined,
           periode_selesai_display: periodeSelesaiDisplay,
           updated_shift: shiftSyncResult.updatedCount,
           created_shift: shiftSyncResult.createdCount,
