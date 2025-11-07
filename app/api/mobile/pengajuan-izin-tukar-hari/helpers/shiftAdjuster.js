@@ -25,27 +25,32 @@ async function findExactShift(tx, userId, dateOnly) {
 }
 
 async function findCoveringShift(tx, userId, dateOnly) {
+  const rangeCoversDate = {
+    AND: [{ tanggal_mulai: { lte: dateOnly } }, { tanggal_selesai: { gte: dateOnly } }],
+  };
+
+  const openEndedShift = {
+    tanggal_mulai: { equals: null },
+    tanggal_selesai: { equals: null },
+  };
+
+  const startsLaterShift = {
+    tanggal_mulai: { equals: null },
+    tanggal_selesai: { gte: dateOnly },
+  };
+
+  const endsLaterShift = {
+    tanggal_mulai: { lte: dateOnly },
+    tanggal_selesai: { equals: null },
+  };
+
+  const orConditions = [rangeCoversDate, openEndedShift, startsLaterShift, endsLaterShift].filter(Boolean);
+
   return tx.shiftKerja.findFirst({
     where: {
       id_user: userId,
       deleted_at: null,
-      OR: [
-        {
-          AND: [{ tanggal_mulai: { lte: dateOnly } }, { tanggal_selesai: { gte: dateOnly } }],
-        },
-        {
-          tanggal_mulai: null,
-          tanggal_selesai: null,
-        },
-        {
-          tanggal_mulai: null,
-          tanggal_selesai: { gte: dateOnly },
-        },
-        {
-          tanggal_mulai: { lte: dateOnly },
-          tanggal_selesai: null,
-        },
-      ],
+      OR: orConditions,
     },
     orderBy: [{ tanggal_mulai: 'desc' }, { updated_at: 'desc' }],
   });
