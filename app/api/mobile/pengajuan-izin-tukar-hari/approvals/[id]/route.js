@@ -46,6 +46,72 @@ function summarizeApprovalStatus(approvals) {
   return { anyApproved, allRejected, highestApprovedLevel };
 }
 
+function parseShiftPatternOverrides(rawOverrides) {
+  if (rawOverrides === undefined || rawOverrides === null) {
+    return { overrides: {}, errors: [] };
+  }
+
+  if (typeof rawOverrides !== 'object' || Array.isArray(rawOverrides)) {
+    return { overrides: {}, errors: ['shift_overrides harus berupa objek.'] };
+  }
+
+  const overrides = {};
+  const errors = [];
+
+  const targets = [
+    { key: 'hari_izin', label: 'hari_izin' },
+    { key: 'hari_pengganti', label: 'hari_pengganti' },
+  ];
+
+  for (const { key, label } of targets) {
+    if (!(key in rawOverrides)) continue;
+    const payload = rawOverrides[key];
+
+    if (payload === null || payload === undefined) {
+      errors.push(`shift_overrides.${label}.id_pola_kerja wajib diisi.`);
+      continue;
+    }
+
+    let rawId = payload;
+    if (typeof payload === 'object' && !Array.isArray(payload)) {
+      if (!Object.prototype.hasOwnProperty.call(payload, 'id_pola_kerja')) {
+        errors.push(`shift_overrides.${label}.id_pola_kerja wajib diisi.`);
+        continue;
+      }
+      rawId = payload.id_pola_kerja;
+    }
+
+    if (rawId === null || rawId === undefined) {
+      errors.push(`shift_overrides.${label}.id_pola_kerja wajib diisi.`);
+      continue;
+    }
+
+    const normalized = String(rawId).trim();
+    if (!normalized) {
+      errors.push(`shift_overrides.${label}.id_pola_kerja tidak boleh kosong.`);
+      continue;
+    }
+
+    overrides[key] = { provided: true, value: normalized };
+  }
+
+  return { overrides, errors };
+}
+
+function enrichAdjustmentsWithPolaKerja(adjustments, polaKerjaMap) {
+  if (!Array.isArray(adjustments) || !adjustments.length) return adjustments;
+  if (!polaKerjaMap || !(polaKerjaMap instanceof Map) || polaKerjaMap.size === 0) return adjustments;
+
+  return adjustments.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    const appliedId = item.applied_pola_kerja_id;
+    if (!appliedId) return item;
+    const polaInfo = polaKerjaMap.get(appliedId);
+    if (!polaInfo) return item;
+    return { ...item, applied_pola_kerja: polaInfo };
+  });
+}
+
 async function handleDecision(req, { params }) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -56,9 +122,9 @@ async function handleDecision(req, { params }) {
     return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
   }
 
-  const approvalId = params?.approvalId;
-  if (!approvalId) {
-    return NextResponse.json({ message: 'approvalId wajib diisi.' }, { status: 400 });
+  const id = params?.id;
+  if (!id) {
+    return NextResponse.json({ message: 'id wajib diisi.' }, { status: 400 });
   }
 
   let body;
@@ -75,10 +141,15 @@ async function handleDecision(req, { params }) {
 
   const note = body?.note === undefined || body?.note === null ? null : String(body.note);
 
+  const { overrides: shiftOverrideInput, errors: shiftOverrideErrors } = parseShiftPatternOverrides(body?.shift_overrides);
+  if (shiftOverrideErrors.length) {
+    return NextResponse.json({ message: 'Input shift_overrides tidak valid.', errors: shiftOverrideErrors }, { status: 400 });
+  }
+
   try {
     const result = await db.$transaction(async (tx) => {
       const approvalRecord = await tx.approvalIzinTukarHari.findUnique({
-        where: { id_approval_izin_tukar_hari: approvalId },
+        where: { id_approval_izin_tukar_hari: id },
         include: {
           izin_tukar_hari: {
             select: {
@@ -114,7 +185,7 @@ async function handleDecision(req, { params }) {
       }
 
       const updatedApproval = await tx.approvalIzinTukarHari.update({
-        where: { id_approval_izin_tukar_hari: approvalId },
+        where: { id_approval_izin_tukar_hari: id },
         data: {
           decision,
           note,
@@ -162,6 +233,33 @@ async function handleDecision(req, { params }) {
 
       let submission;
       let shiftAdjustmentResult = null;
+      let polaKerjaMap = new Map();
+
+      const overrideIds = Object.values(shiftOverrideInput || {})
+        .filter((item) => item && item.provided && item.value)
+        .map((item) => item.value);
+
+      if (overrideIds.length) {
+        const uniqueOverrideIds = Array.from(new Set(overrideIds));
+        const polaKerjaList = await tx.polaKerja.findMany({
+          where: { id_pola_kerja: { in: uniqueOverrideIds } },
+          select: { id_pola_kerja: true, nama_pola_kerja: true },
+        });
+
+        const foundIds = new Set(polaKerjaList.map((item) => item.id_pola_kerja));
+        const missing = uniqueOverrideIds.filter((id) => !foundIds.has(id));
+        if (missing.length) {
+          throw NextResponse.json(
+            {
+              message: 'Pola kerja yang diminta tidak ditemukan.',
+              missing_pola_kerja_ids: missing,
+            },
+            { status: 400 }
+          );
+        }
+
+        polaKerjaMap = new Map(polaKerjaList.map((item) => [item.id_pola_kerja, { id: item.id_pola_kerja, nama: item.nama_pola_kerja }]));
+      }
       if (Object.keys(parentUpdate).length) {
         submission = await tx.izinTukarHari.update({
           where: { id_izin_tukar_hari: approvalRecord.id_izin_tukar_hari },
@@ -176,7 +274,26 @@ async function handleDecision(req, { params }) {
       }
       if (decision === 'disetujui' && previousStatus !== 'disetujui') {
         try {
-          shiftAdjustmentResult = await applyShiftSwapForIzinTukarHari(tx, approvalRecord.izin_tukar_hari);
+          shiftAdjustmentResult = await applyShiftSwapForIzinTukarHari(tx, approvalRecord.izin_tukar_hari, shiftOverrideInput);
+
+          const appliedIds = Array.from(new Set((shiftAdjustmentResult?.adjustments || []).map((item) => item?.applied_pola_kerja_id).filter((value) => typeof value === 'string' && value.length))).filter((id) => !polaKerjaMap.has(id));
+
+          if (appliedIds.length) {
+            const polaKerjaFromAdjustments = await tx.polaKerja.findMany({
+              where: { id_pola_kerja: { in: appliedIds } },
+              select: { id_pola_kerja: true, nama_pola_kerja: true },
+            });
+            for (const item of polaKerjaFromAdjustments) {
+              polaKerjaMap.set(item.id_pola_kerja, {
+                id: item.id_pola_kerja,
+                nama: item.nama_pola_kerja,
+              });
+            }
+          }
+
+          if (shiftAdjustmentResult && Array.isArray(shiftAdjustmentResult.adjustments)) {
+            shiftAdjustmentResult.adjustments = enrichAdjustmentsWithPolaKerja(shiftAdjustmentResult.adjustments, polaKerjaMap);
+          }
         } catch (shiftErr) {
           console.error('Gagal memperbarui shift tukar hari:', shiftErr);
           shiftAdjustmentResult = {

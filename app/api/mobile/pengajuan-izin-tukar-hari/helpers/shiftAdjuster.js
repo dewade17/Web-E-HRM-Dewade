@@ -51,7 +51,60 @@ async function findCoveringShift(tx, userId, dateOnly) {
   });
 }
 
-async function ensureShiftStatusForDate(tx, { userId, targetDate, desiredStatus }) {
+function normalizePolaKerjaOverride(rawOverride) {
+  if (rawOverride === undefined || rawOverride === null) {
+    return { provided: false, value: null };
+  }
+
+  if (typeof rawOverride === 'string') {
+    const normalized = rawOverride.trim();
+    if (!normalized) {
+      throw new Error('id_pola_kerja tidak boleh berupa string kosong.');
+    }
+    return { provided: true, value: normalized };
+  }
+
+  if (typeof rawOverride !== 'object') {
+    return { provided: false, value: null };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(rawOverride, 'provided') || Object.prototype.hasOwnProperty.call(rawOverride, 'value')) {
+    const provided = Boolean(rawOverride.provided);
+    if (!provided) {
+      return { provided: false, value: null };
+    }
+
+    const overrideValue = rawOverride.value;
+    if (overrideValue === undefined || overrideValue === null) {
+      throw new Error('id_pola_kerja tidak boleh bernilai null.');
+    }
+
+    const normalizedValue = String(overrideValue).trim();
+    if (!normalizedValue) {
+      throw new Error('id_pola_kerja tidak boleh berupa string kosong.');
+    }
+
+    return { provided: true, value: normalizedValue };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(rawOverride, 'id_pola_kerja')) {
+    return { provided: false, value: null };
+  }
+
+  const value = rawOverride.id_pola_kerja;
+  if (value === undefined || value === null) {
+    throw new Error('id_pola_kerja tidak boleh bernilai null.');
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) {
+    throw new Error('id_pola_kerja tidak boleh berupa string kosong.');
+  }
+
+  return { provided: true, value: normalized };
+}
+
+export async function ensureShiftStatusForDate(tx, { userId, targetDate, desiredStatus, polaKerjaOverride }) {
   const dateOnly = toDateOnly(targetDate);
   if (!userId || !dateOnly || !desiredStatus) {
     return {
@@ -62,29 +115,53 @@ async function ensureShiftStatusForDate(tx, { userId, targetDate, desiredStatus 
     };
   }
 
+  const override = normalizePolaKerjaOverride(polaKerjaOverride);
+
   const isoDate = formatDateOnly(dateOnly);
-  const adjustments = { date: isoDate, status: desiredStatus, action: null };
+  const adjustments = {
+    date: isoDate,
+    status: desiredStatus,
+    action: null,
+    applied_pola_kerja_id: override.provided ? override.value : null,
+  };
 
   const existingExact = await findExactShift(tx, userId, dateOnly);
   if (existingExact) {
-    if (existingExact.status === desiredStatus) {
+    const shouldUpdateStatus = existingExact.status !== desiredStatus;
+    const existingPolaKerjaId = existingExact.id_pola_kerja ?? null;
+    const targetPolaKerjaId = override.provided ? override.value : existingPolaKerjaId;
+    const shouldUpdatePolaKerja = override.provided && targetPolaKerjaId !== existingPolaKerjaId;
+
+    if (!shouldUpdateStatus && !shouldUpdatePolaKerja) {
       adjustments.action = 'noop';
       adjustments.shift_id = existingExact.id_shift_kerja;
+      adjustments.applied_pola_kerja_id = targetPolaKerjaId;
       return adjustments;
+    }
+
+    const updatePayload = {};
+    if (shouldUpdateStatus) {
+      updatePayload.status = desiredStatus;
+    }
+    if (shouldUpdatePolaKerja) {
+      updatePayload.id_pola_kerja = targetPolaKerjaId;
     }
 
     const updated = await tx.shiftKerja.update({
       where: { id_shift_kerja: existingExact.id_shift_kerja },
-      data: { status: desiredStatus },
-      select: { id_shift_kerja: true },
+      data: updatePayload,
+      select: { id_shift_kerja: true, id_pola_kerja: true },
     });
 
     adjustments.action = 'update';
     adjustments.shift_id = updated.id_shift_kerja;
+    adjustments.applied_pola_kerja_id = override.provided ? targetPolaKerjaId : updated.id_pola_kerja ?? existingPolaKerjaId ?? null;
     return adjustments;
   }
 
   const covering = await findCoveringShift(tx, userId, dateOnly);
+
+  const appliedPolaKerjaId = override.provided ? override.value : covering?.id_pola_kerja ?? null;
 
   const created = await tx.shiftKerja.create({
     data: {
@@ -93,14 +170,15 @@ async function ensureShiftStatusForDate(tx, { userId, targetDate, desiredStatus 
       tanggal_mulai: dateOnly,
       tanggal_selesai: dateOnly,
       hari_kerja: isoDate,
-      id_pola_kerja: covering?.id_pola_kerja ?? null,
+      id_pola_kerja: appliedPolaKerjaId,
     },
-    select: { id_shift_kerja: true, hari_kerja: true },
+    select: { id_shift_kerja: true, hari_kerja: true, id_pola_kerja: true },
   });
 
   adjustments.action = 'create';
   adjustments.shift_id = created.id_shift_kerja;
-  adjustments.copied_schedule = covering ? summarizeHariKerja(covering.hari_kerja) : null;
+  adjustments.applied_pola_kerja_id = created.id_pola_kerja ?? appliedPolaKerjaId;
+  adjustments.copied_schedule = !override.provided && covering ? summarizeHariKerja(covering.hari_kerja) : null;
   return adjustments;
 }
 
@@ -124,7 +202,7 @@ function summarizeHariKerja(rawValue) {
   }
 }
 
-export async function applyShiftSwapForIzinTukarHari(tx, submission) {
+export async function applyShiftSwapForIzinTukarHari(tx, submission, overrides = {}) {
   if (!tx || !submission) {
     return { adjustments: [], issues: [{ message: 'Data transaksi atau pengajuan tidak valid.' }] };
   }
@@ -150,7 +228,13 @@ export async function applyShiftSwapForIzinTukarHari(tx, submission) {
 
   if (hariIzin) {
     try {
-      adjustments.push(await ensureShiftStatusForDate(tx, { userId, targetDate: hariIzin, desiredStatus: 'LIBUR' }));
+      const result = await ensureShiftStatusForDate(tx, {
+        userId,
+        targetDate: hariIzin,
+        desiredStatus: 'LIBUR',
+        polaKerjaOverride: overrides?.hari_izin,
+      });
+      adjustments.push({ ...result, target: 'hari_izin' });
     } catch (err) {
       issues.push({
         message: 'Gagal memperbarui shift untuk hari izin.',
@@ -162,7 +246,13 @@ export async function applyShiftSwapForIzinTukarHari(tx, submission) {
 
   if (hariPengganti) {
     try {
-      adjustments.push(await ensureShiftStatusForDate(tx, { userId, targetDate: hariPengganti, desiredStatus: 'KERJA' }));
+      const result = await ensureShiftStatusForDate(tx, {
+        userId,
+        targetDate: hariPengganti,
+        desiredStatus: 'KERJA',
+        polaKerjaOverride: overrides?.hari_pengganti,
+      });
+      adjustments.push({ ...result, target: 'hari_pengganti' });
     } catch (err) {
       issues.push({
         message: 'Gagal memperbarui shift untuk hari pengganti.',
