@@ -4,7 +4,8 @@ import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, startOfUTCDay, endOfUTCDay } from '@/helpers/date-helper';
 import { sendNotification } from '@/app/utils/services/notificationService';
-import { parseRequestBody } from '@/app/api/_utils/requestBody';
+import { parseRequestBody, findFileInBody, isNullLike } from '@/app/api/_utils/requestBody';
+import storageClient from '@/app/api/_utils/storageClient';
 import { extractApprovalsFromBody, validateApprovalEntries } from '@/app/api/mobile/_utils/approvalValidation';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
@@ -58,17 +59,6 @@ const normRole = (role) =>
     .trim()
     .toUpperCase();
 const canManageAll = (role) => ADMIN_ROLES.has(normRole(role));
-
-function isNullLike(value) {
-  if (value === null || value === undefined) return true;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return true;
-    const lowered = trimmed.toLowerCase();
-    if (lowered === 'null' || lowered === 'undefined') return true;
-  }
-  return false;
-}
 
 function formatDateISO(value) {
   if (!value) return '-';
@@ -316,14 +306,62 @@ export async function POST(req) {
     const parsed = await parseRequestBody(req);
     const body = parsed.body || {};
 
-    const hariIzin = parseDateOnlyToUTC(body.hari_izin);
-    if (!hariIzin) {
-      return NextResponse.json({ message: "Field 'hari_izin' wajib diisi dan harus berupa tanggal yang valid." }, { status: 400 });
+    /*
+     * Perubahan besar: mendukung pengajuan banyak tanggal
+     * Secara historis, API ini hanya menerima satu hari_izin dan satu hari_pengganti.
+     * Namun untuk memenuhi permintaan agar satu pengajuan bisa memilih lebih dari satu tanggal,
+     * kita cek apakah input merupakan array. Jika array, setiap pasangan akan dibuatkan record terpisah.
+     */
+    const rawHariIzin = body.hari_izin;
+    const rawHariPengganti = body.hari_pengganti;
+
+    // Normalisasi menjadi array
+    const hariIzinArr = Array.isArray(rawHariIzin) ? rawHariIzin : [rawHariIzin];
+    const hariPenggantiArr = Array.isArray(rawHariPengganti) ? rawHariPengganti : [rawHariPengganti];
+
+    // Validasi jumlah array: boleh 1 atau sama panjang
+    if (hariIzinArr.length > 1 && hariPenggantiArr.length > 1 && hariIzinArr.length !== hariPenggantiArr.length) {
+      return NextResponse.json(
+        {
+          message: "Jumlah elemen pada 'hari_izin' dan 'hari_pengganti' tidak sesuai. Panjang array keduanya harus sama atau salah satunya satu.",
+        },
+        { status: 400 }
+      );
     }
 
-    const hariPengganti = parseDateOnlyToUTC(body.hari_pengganti);
-    if (!hariPengganti) {
-      return NextResponse.json({ message: "Field 'hari_pengganti' wajib diisi dan harus berupa tanggal yang valid." }, { status: 400 });
+    // Parse setiap pasangan tanggal
+    const datePairs = [];
+    for (let i = 0; i < hariIzinArr.length; i++) {
+      const hIzinRaw = hariIzinArr[i];
+      const hPenggantiRaw = hariPenggantiArr.length > 1 ? hariPenggantiArr[i] : hariPenggantiArr[0];
+      const hIzin = parseDateOnlyToUTC(hIzinRaw);
+      if (!hIzin) {
+        return NextResponse.json({ message: "Field 'hari_izin' wajib diisi dan harus berupa tanggal yang valid." }, { status: 400 });
+      }
+      const hPengganti = parseDateOnlyToUTC(hPenggantiRaw);
+      if (!hPengganti) {
+        return NextResponse.json({ message: "Field 'hari_pengganti' wajib diisi dan harus berupa tanggal yang valid." }, { status: 400 });
+      }
+      datePairs.push({ hariIzin: hIzin, hariPengganti: hPengganti });
+    }
+
+    // ===== Lampiran processing =====
+    // Allow clients to attach a file via multipart form-data under various keys or provide a direct URL.
+    let uploadMeta = null;
+    let lampiranUrl = null;
+    try {
+      const lampiranFile = findFileInBody(body, ['lampiran_izin_tukar_hari', 'lampiran', 'lampiran_file', 'file']);
+      if (lampiranFile) {
+        // Upload file to object storage and capture metadata
+        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
+        lampiranUrl = res.publicUrl || null;
+        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+      } else if (Object.prototype.hasOwnProperty.call(body, 'lampiran_izin_tukar_hari_url')) {
+        // Fallback: accept a URL or explicit null/empty string to clear existing attachment
+        lampiranUrl = isNullLike(body.lampiran_izin_tukar_hari_url) ? null : String(body.lampiran_izin_tukar_hari_url);
+      }
+    } catch (e) {
+      return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
     }
 
     const kategori = String(body.kategori || '').trim();
@@ -366,35 +404,43 @@ export async function POST(req) {
       return NextResponse.json({ message: 'User tujuan tidak ditemukan.' }, { status: 404 });
     }
 
-    const result = await db.$transaction(async (tx) => {
-      const created = await tx.izinTukarHari.create({
-        data: {
-          id_user: targetUserId,
-          hari_izin: hariIzin,
-          hari_pengganti: hariPengganti,
-          kategori,
-          keperluan,
-          handover,
-          status: statusRaw,
-          current_level: currentLevel,
-          jenis_pengajuan,
-        },
-      });
-
-      if (tagUserIds && tagUserIds.length) {
-        await tx.handoverTukarHari.createMany({
-          data: tagUserIds.map((id) => ({
-            id_izin_tukar_hari: created.id_izin_tukar_hari,
-            id_user_tagged: id,
-          })),
-          skipDuplicates: true,
-        });
-      }
+    // ===== Proses transaksi untuk banyak tanggal =====
+    const resultList = await db.$transaction(async (tx) => {
+      // Pre-validate approvals jika ada
+      let approvalsValidated = [];
       if (approvalsInput !== undefined) {
-        const approvals = await validateApprovalEntries(approvalsInput, tx);
-        if (approvals.length) {
+        approvalsValidated = await validateApprovalEntries(approvalsInput, tx);
+      }
+      const createdRecords = [];
+      for (const { hariIzin: hIzin, hariPengganti: hPengganti } of datePairs) {
+        const created = await tx.izinTukarHari.create({
+          data: {
+            id_user: targetUserId,
+            hari_izin: hIzin,
+            hari_pengganti: hPengganti,
+            kategori,
+            keperluan,
+            handover,
+            status: statusRaw,
+            current_level: currentLevel,
+            jenis_pengajuan,
+            // Store URL to uploaded attachment (may be null)
+            lampiran_izin_tukar_hari_url: lampiranUrl,
+          },
+        });
+
+        if (tagUserIds && tagUserIds.length) {
+          await tx.handoverTukarHari.createMany({
+            data: tagUserIds.map((id) => ({
+              id_izin_tukar_hari: created.id_izin_tukar_hari,
+              id_user_tagged: id,
+            })),
+            skipDuplicates: true,
+          });
+        }
+        if (approvalsInput !== undefined && approvalsValidated.length) {
           await tx.approvalIzinTukarHari.createMany({
-            data: approvals.map((item) => ({
+            data: approvalsValidated.map((item) => ({
               id_izin_tukar_hari: created.id_izin_tukar_hari,
               level: item.level,
               approver_user_id: item.approver_user_id,
@@ -403,14 +449,23 @@ export async function POST(req) {
             })),
           });
         }
+        createdRecords.push(created);
       }
-      return tx.izinTukarHari.findUnique({
-        where: { id_izin_tukar_hari: created.id_izin_tukar_hari },
-        include: baseInclude,
-      });
+      // Fetch full objects with includes
+      return Promise.all(
+        createdRecords.map((item) =>
+          tx.izinTukarHari.findUnique({
+            where: { id_izin_tukar_hari: item.id_izin_tukar_hari },
+            include: baseInclude,
+          })
+        )
+      );
     });
 
-    if (result) {
+    // Kirim notifikasi untuk setiap pengajuan
+    for (const result of resultList) {
+      if (!result) continue;
+
       const deeplink = `/pengajuan-izin-tukar-hari/${result.id_izin_tukar_hari}`;
       const basePayload = {
         nama_pemohon: result.user?.nama_pengguna || 'Rekan',
@@ -505,7 +560,15 @@ export async function POST(req) {
       }
     }
 
-    return NextResponse.json({ message: 'Pengajuan izin tukar hari berhasil dibuat.', data: result }, { status: 201 });
+    return NextResponse.json(
+      {
+        message: resultList.length > 1 ? `Berhasil membuat ${resultList.length} pengajuan izin tukar hari.` : 'Pengajuan izin tukar hari berhasil dibuat.',
+        data: resultList.length === 1 ? resultList[0] : resultList,
+        // Include upload metadata if a file was uploaded
+        upload: uploadMeta || undefined,
+      },
+      { status: 201 }
+    );
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err?.code === 'P2003') {

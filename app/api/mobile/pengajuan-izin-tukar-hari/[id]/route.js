@@ -3,7 +3,8 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
-import { parseRequestBody, isNullLike } from '@/app/api/_utils/requestBody';
+import { parseRequestBody, isNullLike, findFileInBody } from '@/app/api/_utils/requestBody';
+import storageClient from '@/app/api/_utils/storageClient';
 import { extractApprovalsFromBody, normalizeApprovalRole, validateApprovalEntries } from '@/app/api/mobile/_utils/approvalValidation';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
@@ -212,6 +213,24 @@ export async function PUT(req, { params }) {
       data.handover = isNullLike(body.handover) ? null : String(body.handover).trim();
     }
 
+    // ===== Lampiran processing =====
+    // Allow updating or removing attachments on an existing record.
+    let uploadMeta = null;
+    try {
+      const lampiranFile = findFileInBody(body, ['lampiran_izin_tukar_hari', 'lampiran', 'lampiran_file', 'file']);
+      if (lampiranFile) {
+        // Upload new attachment and override existing URL
+        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
+        data.lampiran_izin_tukar_hari_url = res.publicUrl || null;
+        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+      } else if (Object.prototype.hasOwnProperty.call(body, 'lampiran_izin_tukar_hari_url')) {
+        // Accept a direct URL or clear the attachment if null/empty
+        data.lampiran_izin_tukar_hari_url = isNullLike(body.lampiran_izin_tukar_hari_url) ? null : String(body.lampiran_izin_tukar_hari_url);
+      }
+    } catch (e) {
+      return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+    }
+
     if (Object.prototype.hasOwnProperty.call(body, 'status')) {
       const statusRaw = String(body.status || '')
         .trim()
@@ -337,7 +356,12 @@ export async function PUT(req, { params }) {
       });
     });
 
-    return NextResponse.json({ message: 'Pengajuan izin tukar hari berhasil diperbarui.', data: updated });
+    return NextResponse.json({
+      message: 'Pengajuan izin tukar hari berhasil diperbarui.',
+      data: updated,
+      // Include upload metadata if a new file was uploaded
+      upload: uploadMeta || undefined,
+    });
   } catch (err) {
     if (err instanceof NextResponse) return err;
     if (err?.code === 'P2003') {

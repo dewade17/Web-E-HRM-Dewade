@@ -11,7 +11,11 @@ import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from './_utils/approvals';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
-const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
+// Align admin roles with the latest Role enum defined in the Prisma schema.
+// In addition to the previously supported roles, allow SUBADMIN and SUPERVISI
+// to manage all cuti submissions. These roles are treated the same as other
+// administrative roles such as HR, OPERASIONAL, DIREKTUR and SUPERADMIN.
+const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 const pengajuanInclude = {
   user: {
@@ -136,10 +140,21 @@ async function ensureAuth(req) {
 }
 
 function normalizeStatus(value) {
+  /**
+   * Normalize a status string against the allowed approve statuses.  This helper will
+   * gracefully coerce the legacy value "menunggu" to the supported Prisma enum
+   * value "pending".  If the provided value is not recognized, `null` is
+   * returned so callers can handle invalid input.
+   *
+   * @param {any} value - raw status input
+   * @returns {string|null} normalized status or null when invalid
+   */
   if (!value) return null;
-  const normalized = String(value).trim().toLowerCase();
-  if (!APPROVE_STATUSES.has(normalized)) return null;
-  return normalized;
+  const raw = String(value).trim().toLowerCase();
+  // map legacy values to the canonical schema values
+  const mapped = raw === 'menunggu' ? 'pending' : raw;
+  if (!APPROVE_STATUSES.has(mapped)) return null;
+  return mapped;
 }
 
 function parseDateQuery(value) {
@@ -227,7 +242,10 @@ export async function GET(req) {
 
     // --- FIX 2: pending/menunggu dianggap sinonim ---
     if (status) {
-      if (status === 'pending' || status === 'menunggu') {
+      // When the normalized status is 'pending', include both the canonical
+      // 'pending' value and the legacy 'menunggu' value so that older records
+      // remain discoverable.  All other statuses map directly.
+      if (status === 'pending') {
         where.status = { in: ['pending', 'menunggu'] };
       } else {
         where.status = status; // 'disetujui' | 'ditolak'
@@ -326,8 +344,8 @@ export async function POST(req) {
 
   try {
     const id_kategori_cuti = String(body?.id_kategori_cuti || '').trim();
-    const tanggal_mulai_raw = body?.tanggal_mulai;
-    const tanggal_masuk_raw = body?.tanggal_masuk_kerja;
+    const tanggal_mulai_input = body?.tanggal_mulai;
+    const tanggal_masuk_input = body?.tanggal_masuk_kerja;
     const keperluan = body?.keperluan === undefined || body?.keperluan === null ? null : String(body.keperluan);
     const handover = body?.handover === undefined || body?.handover === null ? null : String(body.handover);
 
@@ -341,18 +359,37 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, message: 'id_kategori_cuti wajib diisi.' }, { status: 400 });
     }
 
-    const tanggal_mulai = parseDateOnlyToUTC(tanggal_mulai_raw);
-    if (!tanggal_mulai) {
-      return NextResponse.json({ ok: false, message: 'tanggal_mulai tidak valid.' }, { status: 400 });
+    /*
+     * Mendukung banyak tanggal cuti dalam satu pengajuan.
+     * Jika `tanggal_mulai` atau `tanggal_masuk_kerja` merupakan array (salah satunya atau keduanya),
+     * maka setiap pasangan akan diproses sebagai pengajuan terpisah namun dalam satu request.
+     */
+
+    const startDateArray = Array.isArray(tanggal_mulai_input) ? tanggal_mulai_input : [tanggal_mulai_input];
+    const endDateArray = Array.isArray(tanggal_masuk_input) ? tanggal_masuk_input : [tanggal_masuk_input];
+
+    // Validasi jumlah array: jika lebih dari satu, kedua array harus sama panjang atau endDateArray panjangnya 1
+    if (startDateArray.length > 1 && endDateArray.length > 1 && startDateArray.length !== endDateArray.length) {
+      return NextResponse.json({ ok: false, message: "Jumlah elemen pada 'tanggal_mulai' dan 'tanggal_masuk_kerja' tidak sesuai. Panjang array keduanya harus sama atau salah satunya satu." }, { status: 400 });
     }
 
-    const tanggal_masuk_kerja = parseDateOnlyToUTC(tanggal_masuk_raw);
-    if (!tanggal_masuk_kerja) {
-      return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja tidak valid.' }, { status: 400 });
-    }
-
-    if (tanggal_masuk_kerja < tanggal_mulai) {
-      return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja tidak boleh sebelum tanggal_mulai.' }, { status: 400 });
+    // Parse setiap tanggal menjadi pair
+    const datePairs = [];
+    for (let i = 0; i < startDateArray.length; i++) {
+      const mulaiRaw = startDateArray[i];
+      const masukRaw = endDateArray.length > 1 ? endDateArray[i] : endDateArray[0];
+      const tanggal_mulai = parseDateOnlyToUTC(mulaiRaw);
+      if (!tanggal_mulai) {
+        return NextResponse.json({ ok: false, message: 'tanggal_mulai tidak valid.' }, { status: 400 });
+      }
+      const tanggal_masuk_kerja = parseDateOnlyToUTC(masukRaw);
+      if (!tanggal_masuk_kerja) {
+        return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja tidak valid.' }, { status: 400 });
+      }
+      if (tanggal_masuk_kerja < tanggal_mulai) {
+        return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja tidak boleh sebelum tanggal_mulai.' }, { status: 400 });
+      }
+      datePairs.push({ tanggal_mulai, tanggal_masuk_kerja });
     }
 
     const handoverIdsInput = body?.['handover_tag_user_ids[]'] ?? body?.handover_tag_user_ids;
@@ -408,43 +445,55 @@ export async function POST(req) {
       }
     }
 
-    const pengajuan = await db.$transaction(async (tx) => {
-      const created = await tx.pengajuanCuti.create({
-        data: {
-          id_user: actorId,
-          id_kategori_cuti,
-          keperluan,
-          tanggal_mulai,
-          tanggal_masuk_kerja,
-          handover,
-          jenis_pengajuan,
-          lampiran_cuti_url: lampiranUrl,
-        },
-      });
-
-      if (approvalsInput !== undefined) {
-        await syncApprovalRecords(tx, created.id_pengajuan_cuti, approvalsInput);
-      }
-
-      if (handoverIds && handoverIds.length) {
-        await tx.handoverCuti.createMany({
-          data: handoverIds.map((id_user_tagged) => ({
-            id_pengajuan_cuti: created.id_pengajuan_cuti,
-            id_user_tagged,
-          })),
-          skipDuplicates: true,
+    /*
+     * Proses pembuatan pengajuan cuti untuk setiap pasangan tanggal.
+     * Kita iterasi setiap datePairs yang sudah disiapkan di atas, membuat record secara terpisah
+     * namun dalam satu transaksi. Setelah transaksi selesai, setiap record lengkap (dengan includes)
+     * akan dikirimkan dalam bentuk array jika lebih dari satu, atau sebagai objek tunggal jika hanya satu.
+     */
+    const fullPengajuans = await db.$transaction(async (tx) => {
+      const createdRecords = [];
+      for (const { tanggal_mulai: tMulai, tanggal_masuk_kerja: tMasuk } of datePairs) {
+        const created = await tx.pengajuanCuti.create({
+          data: {
+            id_user: actorId,
+            id_kategori_cuti,
+            keperluan,
+            tanggal_mulai: tMulai,
+            tanggal_masuk_kerja: tMasuk,
+            handover,
+            jenis_pengajuan,
+            lampiran_cuti_url: lampiranUrl,
+          },
         });
+        if (approvalsInput !== undefined) {
+          await syncApprovalRecords(tx, created.id_pengajuan_cuti, approvalsInput);
+        }
+        if (handoverIds && handoverIds.length) {
+          await tx.handoverCuti.createMany({
+            data: handoverIds.map((id_user_tagged) => ({
+              id_pengajuan_cuti: created.id_pengajuan_cuti,
+              id_user_tagged,
+            })),
+            skipDuplicates: true,
+          });
+        }
+        createdRecords.push(created);
       }
-
-      return created;
+      // fetch full objects with includes
+      return Promise.all(
+        createdRecords.map((item) =>
+          tx.pengajuanCuti.findUnique({
+            where: { id_pengajuan_cuti: item.id_pengajuan_cuti },
+            include: pengajuanInclude,
+          })
+        )
+      );
     });
 
-    const fullPengajuan = await db.pengajuanCuti.findUnique({
-      where: { id_pengajuan_cuti: pengajuan.id_pengajuan_cuti },
-      include: pengajuanInclude,
-    });
-
-    if (fullPengajuan) {
+    // Kirim notifikasi untuk setiap pengajuan yang telah dibuat
+    for (const fullPengajuan of fullPengajuans) {
+      if (!fullPengajuan) continue;
       const deeplink = `/pengajuan-cuti/${fullPengajuan.id_pengajuan_cuti}`;
       const basePayload = {
         nama_pemohon: fullPengajuan.user?.nama_pengguna || 'Rekan',
@@ -462,16 +511,13 @@ export async function POST(req) {
 
       const notifiedUsers = new Set();
       const notifPromises = [];
-
       if (Array.isArray(fullPengajuan.handover_users)) {
         for (const handoverUser of fullPengajuan.handover_users) {
           const taggedId = handoverUser?.id_user_tagged;
           if (!taggedId || notifiedUsers.has(taggedId)) continue;
           notifiedUsers.add(taggedId);
-
           const overrideTitle = `${basePayload.nama_pemohon} mengajukan cuti`;
           const overrideBody = `${basePayload.nama_pemohon} menandai Anda sebagai handover cuti (${basePayload.kategori_cuti}) pada ${basePayload.tanggal_mulai_display}.`;
-
           notifPromises.push(
             sendNotification(
               'LEAVE_HANDOVER_TAGGED',
@@ -489,11 +535,9 @@ export async function POST(req) {
           );
         }
       }
-
       if (fullPengajuan.id_user && !notifiedUsers.has(fullPengajuan.id_user)) {
         const overrideTitle = 'Pengajuan cuti berhasil dikirim';
         const overrideBody = `Pengajuan cuti ${basePayload.kategori_cuti} pada ${basePayload.tanggal_mulai_display} telah berhasil dibuat.`;
-
         notifPromises.push(
           sendNotification(
             'LEAVE_HANDOVER_TAGGED',
@@ -509,8 +553,8 @@ export async function POST(req) {
             { deeplink }
           )
         );
+        notifiedUsers.add(fullPengajuan.id_user);
       }
-
       if (notifPromises.length) {
         await Promise.allSettled(notifPromises);
       }
@@ -518,8 +562,8 @@ export async function POST(req) {
 
     return NextResponse.json({
       ok: true,
-      message: 'Pengajuan cuti berhasil dibuat.',
-      data: fullPengajuan ?? pengajuan,
+      message: fullPengajuans.length > 1 ? `Berhasil membuat ${fullPengajuans.length} pengajuan cuti.` : 'Pengajuan cuti berhasil dibuat.',
+      data: fullPengajuans.length === 1 ? fullPengajuans[0] : fullPengajuans,
       upload: uploadMeta || undefined,
     });
   } catch (err) {

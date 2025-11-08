@@ -206,7 +206,6 @@ async function syncShiftLiburForApprovedLeave(tx, { userId, startDate, returnDat
     const createResult = await tx.shiftKerja.createMany({ data, skipDuplicates: true });
     createdCount = createResult?.count ?? data.length;
   }
-
   let returnShiftAdjustment = null;
   const effectiveReturnShift = returnShift?.date ? toDateOnly(returnShift.date) : toDateOnly(returnDate);
   const returnShiftIdPolaKerja = returnShift?.idPolaKerja || null;
