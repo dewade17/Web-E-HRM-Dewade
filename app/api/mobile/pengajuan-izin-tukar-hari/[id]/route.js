@@ -10,6 +10,17 @@ import { extractApprovalsFromBody, normalizeApprovalRole, validateApprovalEntrie
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
 
+/*
+ * Include definition for a complete IzinTukarHari object.  In addition to
+ * the previously selected relations (user, handover_users, approvals),
+ * this now pulls in the related `pairs` records.  Each pair in the
+ * `pairs` relation contains the swap date (hari_izin) and the replacement
+ * date (hari_pengganti) along with an optional note.  Ordering by
+ * `hari_izin` ensures that the first element in the array represents
+ * the earliest swap pair.  Consumers can derive the legacy scalar
+ * properties (hari_izin and hari_pengganti) by referencing the first
+ * element of this sorted array.
+ */
 const baseInclude = {
   user: {
     select: {
@@ -44,6 +55,16 @@ const baseInclude = {
       decided_at: true,
       note: true,
     },
+  },
+  // Pull all swap pairs associated with this submission.  Ordering by
+  // hari_izin allows callers to easily determine the first/earliest swap.
+  pairs: {
+    select: {
+      hari_izin: true,
+      hari_pengganti: true,
+      catatan_pair: true,
+    },
+    orderBy: { hari_izin: 'asc' },
   },
 };
 
@@ -131,7 +152,30 @@ export async function GET(_req, { params }) {
   try {
     const pengajuan = await getPengajuanOr404(params.id);
     if (pengajuan instanceof NextResponse) return pengajuan;
-    return NextResponse.json({ ok: true, data: pengajuan });
+    // Compute derived hari_izin and hari_pengganti from the first pair.
+    let derivedHariIzin = null;
+    let derivedHariPengganti = null;
+    let pairs = [];
+    if (Array.isArray(pengajuan.pairs)) {
+      // Normalize pairs to plain objects and sort by hari_izin ascending
+      pairs = pengajuan.pairs
+        .map((p) => ({
+          hari_izin: p.hari_izin,
+          hari_pengganti: p.hari_pengganti,
+          catatan_pair: p.catatan_pair ?? null,
+        }))
+        .sort((a, b) => {
+          const aT = a.hari_izin instanceof Date ? a.hari_izin.getTime() : new Date(a.hari_izin).getTime();
+          const bT = b.hari_izin instanceof Date ? b.hari_izin.getTime() : new Date(b.hari_izin).getTime();
+          return aT - bT;
+        });
+      if (pairs.length) {
+        derivedHariIzin = pairs[0].hari_izin;
+        derivedHariPengganti = pairs[0].hari_pengganti;
+      }
+    }
+    const { pairs: _unusedPairs, ...rest } = pengajuan;
+    return NextResponse.json({ ok: true, data: { ...rest, hari_izin: derivedHariIzin, hari_pengganti: derivedHariPengganti, pairs } });
   } catch (err) {
     console.error('GET /mobile/pengajuan-izin-tukar-hari/:id error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
@@ -181,20 +225,37 @@ export async function PUT(req, { params }) {
       data.id_user = nextId;
     }
 
-    if (Object.prototype.hasOwnProperty.call(body, 'hari_izin')) {
-      const parsed = parseDateOnlyToUTC(body.hari_izin);
-      if (!parsed) {
-        return NextResponse.json({ message: "Field 'hari_izin' harus berupa tanggal yang valid." }, { status: 400 });
+    // Extract potential updates to the swap date pairs.  In the new schema,
+    // hari_izin and hari_pengganti are no longer stored on the main record.
+    // When one or both of these fields are present in the request body,
+    // interpret them as arrays (or single values) of equal length and
+    // prepare to rebuild the related pairs.  If neither field is provided,
+    // the existing pairs remain unchanged.
+    let newPairs;
+    const hasHariIzin = Object.prototype.hasOwnProperty.call(body, 'hari_izin');
+    const hasHariPengganti = Object.prototype.hasOwnProperty.call(body, 'hari_pengganti');
+    if (hasHariIzin || hasHariPengganti) {
+      const rawIzin = body.hari_izin;
+      const rawPengganti = body.hari_pengganti;
+      const arrIzin = Array.isArray(rawIzin) ? rawIzin : [rawIzin];
+      const arrPengganti = Array.isArray(rawPengganti) ? rawPengganti : [rawPengganti];
+      if (arrIzin.length > 1 && arrPengganti.length > 1 && arrIzin.length !== arrPengganti.length) {
+        return NextResponse.json({ message: "Jumlah elemen pada 'hari_izin' dan 'hari_pengganti' tidak sesuai. Panjang array keduanya harus sama atau salah satunya satu." }, { status: 400 });
       }
-      data.hari_izin = parsed;
-    }
-
-    if (Object.prototype.hasOwnProperty.call(body, 'hari_pengganti')) {
-      const parsed = parseDateOnlyToUTC(body.hari_pengganti);
-      if (!parsed) {
-        return NextResponse.json({ message: "Field 'hari_pengganti' harus berupa tanggal yang valid." }, { status: 400 });
+      newPairs = [];
+      for (let i = 0; i < arrIzin.length; i++) {
+        const izinRaw = arrIzin[i];
+        const penggantiRaw = arrPengganti.length > 1 ? arrPengganti[i] : arrPengganti[0];
+        const dIzin = parseDateOnlyToUTC(izinRaw);
+        if (!dIzin) {
+          return NextResponse.json({ message: "Field 'hari_izin' harus berupa tanggal yang valid." }, { status: 400 });
+        }
+        const dPengganti = parseDateOnlyToUTC(penggantiRaw);
+        if (!dPengganti) {
+          return NextResponse.json({ message: "Field 'hari_pengganti' harus berupa tanggal yang valid." }, { status: 400 });
+        }
+        newPairs.push({ hari_izin: dIzin, hari_pengganti: dPengganti });
       }
-      data.hari_pengganti = parsed;
     }
 
     if (Object.prototype.hasOwnProperty.call(body, 'kategori')) {
@@ -259,11 +320,29 @@ export async function PUT(req, { params }) {
     }
     const approvalsInput = extractApprovalsFromBody(body);
     const updated = await db.$transaction(async (tx) => {
+      // Update base scalar fields on the submission
       const saved = await tx.izinTukarHari.update({
         where: { id_izin_tukar_hari: pengajuan.id_izin_tukar_hari },
         data,
       });
 
+      // When newPairs is provided, rebuild the list of swap pairs.  The
+      // existing pairs are removed and replaced with the provided pairs.
+      if (newPairs !== undefined) {
+        await tx.izinTukarHariPair.deleteMany({ where: { id_izin_tukar_hari: saved.id_izin_tukar_hari } });
+        if (Array.isArray(newPairs) && newPairs.length) {
+          await tx.izinTukarHariPair.createMany({
+            data: newPairs.map((p) => ({
+              id_izin_tukar_hari: saved.id_izin_tukar_hari,
+              hari_izin: p.hari_izin,
+              hari_pengganti: p.hari_pengganti,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
+      // Synchronize tagged users if provided
       if (tagUserIds !== undefined) {
         await tx.handoverTukarHari.deleteMany({
           where: {
@@ -294,6 +373,7 @@ export async function PUT(req, { params }) {
         }
       }
 
+      // Synchronize approvals if provided
       if (approvalsInput !== undefined) {
         const approvals = await validateApprovalEntries(approvalsInput, tx);
         const existingApprovals = await tx.approvalIzinTukarHari.findMany({
@@ -356,9 +436,31 @@ export async function PUT(req, { params }) {
       });
     });
 
+    // Compute derived hari_izin and hari_pengganti from the updated pairs.
+    let outPairs = [];
+    let firstHariIzin = null;
+    let firstHariPengganti = null;
+    if (updated && Array.isArray(updated.pairs)) {
+      outPairs = updated.pairs
+        .map((p) => ({
+          hari_izin: p.hari_izin,
+          hari_pengganti: p.hari_pengganti,
+          catatan_pair: p.catatan_pair ?? null,
+        }))
+        .sort((a, b) => {
+          const aT = a.hari_izin instanceof Date ? a.hari_izin.getTime() : new Date(a.hari_izin).getTime();
+          const bT = b.hari_izin instanceof Date ? b.hari_izin.getTime() : new Date(b.hari_izin).getTime();
+          return aT - bT;
+        });
+      if (outPairs.length) {
+        firstHariIzin = outPairs[0].hari_izin;
+        firstHariPengganti = outPairs[0].hari_pengganti;
+      }
+    }
+    const { pairs: _unusedPairsUpdate, ...restUpdated } = updated || {};
     return NextResponse.json({
       message: 'Pengajuan izin tukar hari berhasil diperbarui.',
-      data: updated,
+      data: { ...restUpdated, hari_izin: firstHariIzin, hari_pengganti: firstHariPengganti, pairs: outPairs },
       // Include upload metadata if a new file was uploaded
       upload: uploadMeta || undefined,
     });

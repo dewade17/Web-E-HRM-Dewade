@@ -9,15 +9,14 @@ datasource db {
 
 /// ===== Enums =====
 
-// DISESUAIKAN: Menambahkan role dari diagram
 enum Role {
   KARYAWAN
   HR
   OPERASIONAL
   DIREKTUR
-  SUPERADMIN // Ditambahkan
-  SUBADMIN // Ditambahkan
-  SUPERVISI // Ditambahkan
+  SUPERADMIN
+  SUBADMIN
+  SUPERVISI
 }
 
 enum AtasanRole {
@@ -45,20 +44,17 @@ enum WorkStatus {
   selesai
 }
 
-// BARU: Ditambahkan dari diagram User
 enum StatusKerja {
   AKTIF
   TIDAK_AKTIF
   CUTI
 }
 
-// BARU: Ditambahkan dari diagram User
 enum JenisKelamin {
   LAKI_LAKI
   PEREMPUAN
 }
 
-// BARU: Status Cuti User
 enum StatusCuti {
   aktif
   nonaktif
@@ -101,7 +97,6 @@ enum ReportStatus {
   ditolak
 }
 
-// Status baru khusus Agenda Kerja
 enum AgendaStatus {
   teragenda
   diproses
@@ -115,7 +110,6 @@ enum StatusKunjungan {
   selesai
 }
 
-// ====== In-app Notification ======
 enum NotificationStatus {
   unread
   read
@@ -175,13 +169,12 @@ model BroadcastRecipient {
 model BroadcastAttachment {
   id_broadcast_attachment String @id @default(uuid()) @db.Char(36)
   id_broadcast            String @db.Char(36)
-  lampiran_url            String @db.LongText // URL ke file lampiran
+  lampiran_url            String @db.LongText
 
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @updatedAt @db.DateTime(0)
   deleted_at DateTime? @db.DateTime(0)
 
-  // Relasi kembali ke Broadcast
   broadcast Broadcast @relation(fields: [id_broadcast], references: [id_broadcasts], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([id_broadcast])
@@ -404,20 +397,17 @@ model User {
 
   supervised_department Departement? @relation("SupervisorForDepartment")
 
-  // ===== RELASI BARU UNTUK APPROVAL =====
   approvals_pengajuan_cuti ApprovalPengajuanCuti[]    @relation("ApprovalPengajuanCuti_approver")
   approvals_izin_sakit     ApprovalIzinSakit[]        @relation("ApprovalIzinSakit_approver")
   approvals_izin_jam       ApprovalPengajuanIzinJam[] @relation("ApprovalIzinJam_approver")
   approvals_tukar_hari     ApprovalIzinTukarHari[]    @relation("ApprovalTukarHari_approver")
 
-  // ===== RELASI BARU UNTUK PENGAJUAN =====
   pengajuan_cuti       PengajuanCuti[]
   pengajuan_izin_sakit PengajuanIzinSakit[]
   pengajuan_izin_jam   PengajuanIzinJam[]
   izin_tukar_hari      IzinTukarHari[]
   konfigurasi_cuti     CutiKonfigurasi[]
 
-  // ===== BARU: RELASI UNTUK HANDOVER TAG =====
   tagged_in_cuti       HandoverCuti[]
   tagged_in_sakit      HandoverIzinSakit[]
   tagged_in_izin_jam   HandoverIzinJam[]
@@ -649,7 +639,6 @@ model Notification {
   @@map("notifications")
 }
 
-// BARU: Model untuk menyimpan template notifikasi yang bisa di-custom
 model NotificationTemplate {
   id            String   @id @default(uuid())
   eventTrigger  String   @unique @map("event_trigger")
@@ -793,12 +782,13 @@ model KategoriCuti {
   @@map("kategori_cuti")
 }
 
+/// ===== Pengajuan Cuti (relasional penuh) =====
+
 model PengajuanCuti {
   id_pengajuan_cuti   String        @id @default(uuid()) @db.Char(36)
   id_user             String        @db.Char(36)
   id_kategori_cuti    String        @db.Char(36)
   keperluan           String?       @db.LongText
-  tanggal_mulai       DateTime      @db.Date
   tanggal_masuk_kerja DateTime      @db.Date
   handover            String?       @db.LongText
   status              ApproveStatus @default(pending)
@@ -814,10 +804,25 @@ model PengajuanCuti {
   kategori_cuti  KategoriCuti            @relation(fields: [id_kategori_cuti], references: [id_kategori_cuti], onDelete: Restrict, onUpdate: Cascade)
   approvals      ApprovalPengajuanCuti[]
   handover_users HandoverCuti[]
+  tanggal_list   PengajuanCutiTanggal[]
 
   @@index([id_user])
   @@index([id_kategori_cuti])
   @@map("pengajuan_cuti")
+}
+
+model PengajuanCutiTanggal {
+  id_pengajuan_cuti_tanggal String   @id @default(uuid()) @db.Char(36)
+  id_pengajuan_cuti         String   @db.Char(36)
+  tanggal_cuti              DateTime @db.Date
+
+  created_at DateTime @default(now()) @db.DateTime(0)
+
+  pengajuan_cuti PengajuanCuti @relation(fields: [id_pengajuan_cuti], references: [id_pengajuan_cuti], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([id_pengajuan_cuti, tanggal_cuti], name: "uniq_tanggal_per_pengajuan")
+  @@index([id_pengajuan_cuti, tanggal_cuti])
+  @@map("pengajuan_cuti_tanggal")
 }
 
 model ApprovalPengajuanCuti {
@@ -841,6 +846,8 @@ model ApprovalPengajuanCuti {
   @@index([approver_user_id])
   @@map("approval_pengajuan_cuti")
 }
+
+/// ===== Izin Sakit & Izin Jam (tidak berubah) =====
 
 model PengajuanIzinSakit {
   id_pengajuan_izin_sakit String        @id @default(uuid()) @db.Char(36)
@@ -911,7 +918,7 @@ model PengajuanIzinJam {
   deleted_at DateTime? @db.DateTime(0)
 
   user           User                       @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
-  kategori       KategoriIzinJam            @relation(fields: [id_kategori_izin_jam], references: [id_kategori_izin_jam], onDelete: Restrict, onUpdate: Cascade) // <-- BARU: Relasi
+  kategori       KategoriIzinJam            @relation(fields: [id_kategori_izin_jam], references: [id_kategori_izin_jam], onDelete: Restrict, onUpdate: Cascade)
   approvals      ApprovalPengajuanIzinJam[]
   handover_users HandoverIzinJam[]
 
@@ -942,11 +949,11 @@ model ApprovalPengajuanIzinJam {
   @@map("approval_pengajuan_izin_jam")
 }
 
+/// ===== Izin Tukar Hari (relasional penuh, berpasangan) =====
+
 model IzinTukarHari {
   id_izin_tukar_hari           String        @id @default(uuid()) @db.Char(36)
   id_user                      String        @db.Char(36)
-  hari_izin                    DateTime      @db.Date
-  hari_pengganti               DateTime      @db.Date
   kategori                     String        @db.VarChar(255)
   keperluan                    String?       @db.LongText
   handover                     String?       @db.LongText
@@ -962,9 +969,30 @@ model IzinTukarHari {
   user           User                    @relation(fields: [id_user], references: [id_user], onDelete: Restrict, onUpdate: Cascade)
   approvals      ApprovalIzinTukarHari[]
   handover_users HandoverTukarHari[]
+  // daftar pasangan tanggal izin<->pengganti
+  pairs          IzinTukarHariPair[]
 
-  @@index([id_user, hari_izin])
+  @@index([id_user, created_at])
   @@map("izin_tukar_hari")
+}
+
+// Satu baris = satu pasangan (hari_izin, hari_pengganti) untuk satu pengajuan
+model IzinTukarHariPair {
+  id_izin_tukar_hari_pair String   @id @default(uuid()) @db.Char(36)
+  id_izin_tukar_hari      String   @db.Char(36)
+  hari_izin               DateTime @db.Date
+  hari_pengganti          DateTime @db.Date
+  catatan_pair            String?  @db.LongText
+
+  created_at DateTime @default(now()) @db.DateTime(0)
+
+  izin_tukar_hari IzinTukarHari @relation(fields: [id_izin_tukar_hari], references: [id_izin_tukar_hari], onDelete: Cascade, onUpdate: Cascade)
+
+  // Cegah duplikasi pasangan dalam satu pengajuan
+  @@unique([id_izin_tukar_hari, hari_izin, hari_pengganti], name: "uniq_pair_per_pengajuan")
+  @@index([id_izin_tukar_hari, hari_izin])
+  @@index([id_izin_tukar_hari, hari_pengganti])
+  @@map("izin_tukar_hari_pair")
 }
 
 model ApprovalIzinTukarHari {

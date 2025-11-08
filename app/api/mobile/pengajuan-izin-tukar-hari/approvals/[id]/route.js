@@ -151,15 +151,24 @@ async function handleDecision(req, { params }) {
       const approvalRecord = await tx.approvalIzinTukarHari.findUnique({
         where: { id_approval_izin_tukar_hari: id },
         include: {
+          // Pull only the scalar fields needed on the parent submission and
+          // include the related pairs.  The scalar hari_izin/hari_pengganti
+          // fields were removed from the model, so we rely on the first
+          // element of the pairs array to determine the affected dates.
           izin_tukar_hari: {
             select: {
               id_izin_tukar_hari: true,
               id_user: true,
-              hari_izin: true,
-              hari_pengganti: true,
               status: true,
               current_level: true,
               deleted_at: true,
+              pairs: {
+                select: {
+                  hari_izin: true,
+                  hari_pengganti: true,
+                },
+                orderBy: { hari_izin: 'asc' },
+              },
             },
           },
         },

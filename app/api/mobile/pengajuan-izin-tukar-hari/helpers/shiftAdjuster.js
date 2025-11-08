@@ -208,14 +208,18 @@ function summarizeHariKerja(rawValue) {
 }
 
 export async function applyShiftSwapForIzinTukarHari(tx, submission, overrides = {}) {
+  // Adjusts shift statuses for each swap pair in a submission.  In the
+  // updated schema, swap dates are stored in the `pairs` relation rather
+  // than as scalar fields on the parent record.  This helper iterates
+  // through each pair, setting the hari_izin date to LIBUR and the
+  // hari_pengganti date to KERJA.  Optional pola kerja overrides can be
+  // supplied via the `overrides` argument (keys: hari_izin, hari_pengganti).
   if (!tx || !submission) {
     return { adjustments: [], issues: [{ message: 'Data transaksi atau pengajuan tidak valid.' }] };
   }
 
-  const { id_user: userId, hari_izin: hariIzinRaw, hari_pengganti: hariPenggantiRaw } = submission;
-  const hariIzin = toDateOnly(hariIzinRaw);
-  const hariPengganti = toDateOnly(hariPenggantiRaw);
-
+  const userId = submission?.id_user;
+  const pairs = Array.isArray(submission?.pairs) ? submission.pairs : [];
   const adjustments = [];
   const issues = [];
 
@@ -223,50 +227,58 @@ export async function applyShiftSwapForIzinTukarHari(tx, submission, overrides =
     issues.push({ message: 'Pengajuan tidak memiliki pemohon yang valid.' });
     return { adjustments, issues };
   }
-
-  if (!hariIzin) {
-    issues.push({ message: 'Tanggal hari izin tidak ditemukan atau tidak valid.' });
-  }
-  if (!hariPengganti) {
-    issues.push({ message: 'Tanggal hari pengganti tidak ditemukan atau tidak valid.' });
+  if (!pairs.length) {
+    issues.push({ message: 'Pengajuan tidak memiliki pasangan tanggal yang valid.' });
+    return { adjustments, issues };
   }
 
-  if (hariIzin) {
-    try {
-      const result = await ensureShiftStatusForDate(tx, {
-        userId,
-        targetDate: hariIzin,
-        desiredStatus: 'LIBUR',
-        polaKerjaOverride: overrides?.hari_izin,
-      });
-      adjustments.push({ ...result, target: 'hari_izin' });
-    } catch (err) {
-      issues.push({
-        message: 'Gagal memperbarui shift untuk hari izin.',
-        detail: err?.message || String(err),
-        date: formatDateOnly(hariIzin),
-      });
+  for (const pair of pairs) {
+    const hariIzin = toDateOnly(pair?.hari_izin);
+    const hariPengganti = toDateOnly(pair?.hari_pengganti);
+    // Validate each date
+    if (!hariIzin) {
+      issues.push({ message: 'Tanggal hari izin tidak ditemukan atau tidak valid.', date: formatDateOnly(pair?.hari_izin) });
+    }
+    if (!hariPengganti) {
+      issues.push({ message: 'Tanggal hari pengganti tidak ditemukan atau tidak valid.', date: formatDateOnly(pair?.hari_pengganti) });
+    }
+    // Apply shift adjustment for hari_izin (LIBUR)
+    if (hariIzin) {
+      try {
+        const result = await ensureShiftStatusForDate(tx, {
+          userId,
+          targetDate: hariIzin,
+          desiredStatus: 'LIBUR',
+          polaKerjaOverride: overrides?.hari_izin,
+        });
+        adjustments.push({ ...result, target: 'hari_izin' });
+      } catch (err) {
+        issues.push({
+          message: 'Gagal memperbarui shift untuk hari izin.',
+          detail: err?.message || String(err),
+          date: formatDateOnly(hariIzin),
+        });
+      }
+    }
+    // Apply shift adjustment for hari_pengganti (KERJA)
+    if (hariPengganti) {
+      try {
+        const result = await ensureShiftStatusForDate(tx, {
+          userId,
+          targetDate: hariPengganti,
+          desiredStatus: 'KERJA',
+          polaKerjaOverride: overrides?.hari_pengganti,
+        });
+        adjustments.push({ ...result, target: 'hari_pengganti' });
+      } catch (err) {
+        issues.push({
+          message: 'Gagal memperbarui shift untuk hari pengganti.',
+          detail: err?.message || String(err),
+          date: formatDateOnly(hariPengganti),
+        });
+      }
     }
   }
-
-  if (hariPengganti) {
-    try {
-      const result = await ensureShiftStatusForDate(tx, {
-        userId,
-        targetDate: hariPengganti,
-        desiredStatus: 'KERJA',
-        polaKerjaOverride: overrides?.hari_pengganti,
-      });
-      adjustments.push({ ...result, target: 'hari_pengganti' });
-    } catch (err) {
-      issues.push({
-        message: 'Gagal memperbarui shift untuk hari pengganti.',
-        detail: err?.message || String(err),
-        date: formatDateOnly(hariPengganti),
-      });
-    }
-  }
-
   return { adjustments, issues };
 }
 

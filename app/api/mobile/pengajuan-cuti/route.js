@@ -10,13 +10,23 @@ import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from './_utils/approvals';
 
-const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
+const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']);
 // Align admin roles with the latest Role enum defined in the Prisma schema.
 // In addition to the previously supported roles, allow SUBADMIN and SUPERVISI
 // to manage all cuti submissions. These roles are treated the same as other
 // administrative roles such as HR, OPERASIONAL, DIREKTUR and SUPERADMIN.
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
+/*
+ * Include definition for a complete Pengajuan Cuti object.  In addition to
+ * the previously selected relations, this now pulls in the related
+ * `tanggal_list` records.  The `tanggal_list` relation represents the
+ * individual leave dates associated with a submission (see the
+ * `PengajuanCutiTanggal` model in the Prisma schema).  Fetching these
+ * dates allows callers to derive the effective start and end of a leave
+ * request without relying on the deprecated `tanggal_mulai` field, which
+ * was removed in the latest schema.
+ */
 const pengajuanInclude = {
   user: {
     select: {
@@ -57,6 +67,15 @@ const pengajuanInclude = {
       decided_at: true,
       note: true,
     },
+  },
+  // Pull all leave dates associated with this submission.  Only the
+  // `tanggal_cuti` field is needed; additional fields like the id are
+  // excluded to reduce payload size.
+  tanggal_list: {
+    select: {
+      tanggal_cuti: true,
+    },
+    orderBy: { tanggal_cuti: 'asc' },
   },
 };
 
@@ -229,37 +248,46 @@ export async function GET(req) {
     const targetUserParam = searchParams.get('id_user');
     const targetUserFilter = targetUserParam ? String(targetUserParam).trim() : '';
 
-    // --- FIX 1: jangan kunci id_user ke actorId untuk admin ---
+    // Build base where clause: restrict to non-deleted submissions of type 'cuti'.
+    // We intentionally avoid referencing the removed `tanggal_mulai` field and
+    // instead rely on the related `tanggal_list` relation for date-based
+    // filtering.  The canManageAll helper still controls whether an actor
+    // sees only their own submissions or all submissions.
     const where = { deleted_at: null, jenis_pengajuan: 'cuti' };
 
     if (!canManageAll(actorRole)) {
-      // non-admin hanya lihat data sendiri
+      // Non-admins may only see their own records
       where.id_user = actorId;
     } else if (targetUserFilter) {
-      // admin bisa filter user tertentu
+      // Admins can optionally filter by a specific user
       where.id_user = targetUserFilter;
     }
 
-    // --- FIX 2: pending/menunggu dianggap sinonim ---
+    // Normalize legacy pending/menunggu statuses into a unified filter.  When
+    // filtering for the canonical 'pending' state, we still include older
+    // records with status 'menunggu'.  Other statuses map directly.
     if (status) {
-      // When the normalized status is 'pending', include both the canonical
-      // 'pending' value and the legacy 'menunggu' value so that older records
-      // remain discoverable.  All other statuses map directly.
       if (status === 'pending') {
         where.status = { in: ['pending', 'menunggu'] };
       } else {
-        where.status = status; // 'disetujui' | 'ditolak'
+        where.status = status;
       }
     }
 
     if (kategoriId) where.id_kategori_cuti = kategoriId;
 
+    // Apply date filters against the related tanggal_list records.  Each
+    // PengajuanCuti may have many associated tanggal_cuti values.  When a
+    // singular `tanggal_mulai` filter is supplied, we treat it as a request
+    // to fetch submissions that contain that exact leave date.  For range
+    // queries we include any submission that has at least one leave date
+    // within the provided interval.
     if (tanggalMulaiEqParam) {
       const parsed = parseDateQuery(tanggalMulaiEqParam);
       if (!parsed) {
         return NextResponse.json({ ok: false, message: 'Parameter tanggal_mulai tidak valid.' }, { status: 400 });
       }
-      where.tanggal_mulai = parsed;
+      where.tanggal_list = { some: { tanggal_cuti: parsed } };
     } else if (tanggalMulaiFromParam || tanggalMulaiToParam) {
       const gte = parseDateQuery(tanggalMulaiFromParam);
       const lte = parseDateQuery(tanggalMulaiToParam);
@@ -269,12 +297,17 @@ export async function GET(req) {
       if (tanggalMulaiToParam && !lte) {
         return NextResponse.json({ ok: false, message: 'Parameter tanggal_mulai_to tidak valid.' }, { status: 400 });
       }
-      where.tanggal_mulai = {
-        ...(gte ? { gte } : {}),
-        ...(lte ? { lte } : {}),
+      where.tanggal_list = {
+        some: {
+          tanggal_cuti: {
+            ...(gte ? { gte } : {}),
+            ...(lte ? { lte } : {}),
+          },
+        },
       };
     }
 
+    // Still support filtering by tanggal_masuk_kerja on the parent record.
     if (tanggalMasukEqParam) {
       const parsed = parseDateQuery(tanggalMasukEqParam);
       if (!parsed) {
@@ -282,21 +315,21 @@ export async function GET(req) {
       }
       where.tanggal_masuk_kerja = parsed;
     } else if (tanggalMasukFromParam || tanggalMasukToParam) {
-      const gte = parseDateQuery(tanggalMasukFromParam);
-      const lte = parseDateQuery(tanggalMasukToParam);
-      if (tanggalMasukFromParam && !gte) {
+      const gteMasuk = parseDateQuery(tanggalMasukFromParam);
+      const lteMasuk = parseDateQuery(tanggalMasukToParam);
+      if (tanggalMasukFromParam && !gteMasuk) {
         return NextResponse.json({ ok: false, message: 'Parameter tanggal_masuk_kerja_from tidak valid.' }, { status: 400 });
       }
-      if (tanggalMasukToParam && !lte) {
+      if (tanggalMasukToParam && !lteMasuk) {
         return NextResponse.json({ ok: false, message: 'Parameter tanggal_masuk_kerja_to tidak valid.' }, { status: 400 });
       }
       where.tanggal_masuk_kerja = {
-        ...(gte ? { gte } : {}),
-        ...(lte ? { lte } : {}),
+        ...(gteMasuk ? { gte: gteMasuk } : {}),
+        ...(lteMasuk ? { lte: lteMasuk } : {}),
       };
     }
 
-    const [total, items] = await Promise.all([
+    const [total, rawItems] = await Promise.all([
       db.pengajuanCuti.count({ where }),
       db.pengajuanCuti.findMany({
         where,
@@ -306,6 +339,30 @@ export async function GET(req) {
         include: pengajuanInclude,
       }),
     ]);
+
+    /*
+     * Transform each returned submission to compute derived properties from
+     * the related tanggal_list.  The earliest leave date becomes
+     * `tanggal_mulai` and the latest date becomes `tanggal_selesai`.  A
+     * flat array of raw date values (without wrapper objects) is exposed via
+     * `tanggal_list` for convenience.  If no dates exist, these fields are
+     * null.
+     */
+    const items = rawItems.map((item) => {
+      const dates = Array.isArray(item.tanggal_list) ? item.tanggal_list.map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))) : [];
+      dates.sort((a, b) => a - b);
+      const tanggal_mulai = dates.length ? dates[0] : null;
+      const tanggal_selesai = dates.length ? dates[dates.length - 1] : null;
+      // Flatten dates to ISO strings for the consumer
+      const tanggal_list = dates.map((d) => d);
+      const { tanggal_list: _unused, ...rest } = item;
+      return {
+        ...rest,
+        tanggal_mulai,
+        tanggal_selesai,
+        tanggal_list,
+      };
+    });
 
     return NextResponse.json({
       ok: true,
@@ -373,7 +430,12 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, message: "Jumlah elemen pada 'tanggal_mulai' dan 'tanggal_masuk_kerja' tidak sesuai. Panjang array keduanya harus sama atau salah satunya satu." }, { status: 400 });
     }
 
-    // Parse setiap tanggal menjadi pair
+    /*
+     * Build pairs of (start, return) dates.  Each pair represents a leave interval
+     * where the employee is away from the start date up to (but not
+     * including) the return date.  These pairs will later be expanded into
+     * individual leave dates to populate the `pengajuan_cuti_tanggal` table.
+     */
     const datePairs = [];
     for (let i = 0; i < startDateArray.length; i++) {
       const mulaiRaw = startDateArray[i];
@@ -454,18 +516,48 @@ export async function POST(req) {
     const fullPengajuans = await db.$transaction(async (tx) => {
       const createdRecords = [];
       for (const { tanggal_mulai: tMulai, tanggal_masuk_kerja: tMasuk } of datePairs) {
+        // Create the parent leave submission.  Note that the `tanggal_mulai` field
+        // has been removed from the model; only the return date
+        // (`tanggal_masuk_kerja`) is stored on the main record.  The
+        // individual leave dates will be persisted into the related
+        // PengajuanCutiTanggal table below.
         const created = await tx.pengajuanCuti.create({
           data: {
             id_user: actorId,
             id_kategori_cuti,
             keperluan,
-            tanggal_mulai: tMulai,
             tanggal_masuk_kerja: tMasuk,
             handover,
             jenis_pengajuan,
             lampiran_cuti_url: lampiranUrl,
           },
         });
+
+        // Expand the leave interval into individual dates and insert into
+        // pengajuan_cuti_tanggal.  The cuti period covers every date from
+        // `tMulai` up to (but not including) `tMasuk`.  This mirrors the
+        // previous behaviour where `tanggal_mulai` represented the first day
+        // off and `tanggal_masuk_kerja` represented the first day back.
+        const dates = [];
+        {
+          const current = new Date(tMulai.getTime());
+          // Ensure we operate in UTC by using getUTCDate/setUTCDate to avoid
+          // daylight saving differences.
+          while (current < tMasuk) {
+            dates.push(new Date(current.getTime()));
+            current.setUTCDate(current.getUTCDate() + 1);
+          }
+        }
+        if (dates.length) {
+          await tx.pengajuanCutiTanggal.createMany({
+            data: dates.map((tgl) => ({
+              id_pengajuan_cuti: created.id_pengajuan_cuti,
+              tanggal_cuti: tgl,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
         if (approvalsInput !== undefined) {
           await syncApprovalRecords(tx, created.id_pengajuan_cuti, approvalsInput);
         }
@@ -495,11 +587,18 @@ export async function POST(req) {
     for (const fullPengajuan of fullPengajuans) {
       if (!fullPengajuan) continue;
       const deeplink = `/pengajuan-cuti/${fullPengajuan.id_pengajuan_cuti}`;
+      // Determine the earliest leave date from the related tanggal_list.  If no
+      // dates exist (which should not occur under normal operation), the
+      // derived values will be null.  The first date is used in the
+      // notification payload in place of the removed `tanggal_mulai` field.
+      const rawDates = Array.isArray(fullPengajuan.tanggal_list) ? fullPengajuan.tanggal_list.map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))) : [];
+      rawDates.sort((a, b) => a - b);
+      const firstDate = rawDates.length ? rawDates[0] : null;
       const basePayload = {
         nama_pemohon: fullPengajuan.user?.nama_pengguna || 'Rekan',
         kategori_cuti: fullPengajuan.kategori_cuti?.nama_kategori || '-',
-        tanggal_mulai: formatDateISO(fullPengajuan.tanggal_mulai),
-        tanggal_mulai_display: formatDateDisplay(fullPengajuan.tanggal_mulai),
+        tanggal_mulai: formatDateISO(firstDate),
+        tanggal_mulai_display: formatDateDisplay(firstDate),
         tanggal_masuk_kerja: formatDateISO(fullPengajuan.tanggal_masuk_kerja),
         tanggal_masuk_kerja_display: formatDateDisplay(fullPengajuan.tanggal_masuk_kerja),
         keperluan: fullPengajuan.keperluan || '-',
