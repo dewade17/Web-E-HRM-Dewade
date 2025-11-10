@@ -43,6 +43,16 @@ function guardOperational(actor) {
   return null;
 }
 
+function parseBooleanLike(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return undefined;
+}
+
 const ALLOWED_ORDER_BY = new Set(['created_at', 'updated_at', 'nama_kategori']);
 
 export async function GET(req) {
@@ -123,12 +133,26 @@ export async function POST(req) {
     }
 
     const nama_kategori = String(rawNama).trim();
+    const dataToCreate = { nama_kategori };
+
+    if (Object.prototype.hasOwnProperty.call(body, 'pengurangan_kouta')) {
+      const rawPengurangan = body.pengurangan_kouta;
+      if (rawPengurangan === null) {
+        return NextResponse.json({ message: "Field 'pengurangan_kouta' harus bernilai boolean true/false." }, { status: 400 });
+      }
+      const parsedPengurangan = parseBooleanLike(rawPengurangan);
+      if (parsedPengurangan === undefined) {
+        return NextResponse.json({ message: "Field 'pengurangan_kouta' harus bernilai boolean true/false." }, { status: 400 });
+      }
+      dataToCreate.pengurangan_kouta = parsedPengurangan;
+    }
 
     const created = await db.kategoriCuti.create({
-      data: { nama_kategori },
+      data: dataToCreate,
       select: {
         id_kategori_cuti: true,
         nama_kategori: true,
+        pengurangan_kouta: true,
         created_at: true,
       },
     });

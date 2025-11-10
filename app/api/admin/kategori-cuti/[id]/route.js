@@ -43,6 +43,16 @@ function guardOperational(actor) {
   return null;
 }
 
+function parseBooleanLike(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return undefined;
+}
+
 export async function GET(req, { params }) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -55,6 +65,7 @@ export async function GET(req, { params }) {
       select: {
         id_kategori_cuti: true,
         nama_kategori: true,
+        pengurangan_kouta: true,
         created_at: true,
         updated_at: true,
         deleted_at: true,
@@ -89,6 +100,18 @@ export async function PUT(req, { params }) {
       payload.nama_kategori = String(body.nama_kategori).trim();
     }
 
+    if (Object.prototype.hasOwnProperty.call(body, 'pengurangan_kouta')) {
+      const rawPengurangan = body.pengurangan_kouta;
+      if (rawPengurangan === null) {
+        return NextResponse.json({ message: "Field 'pengurangan_kouta' harus bernilai boolean true/false." }, { status: 400 });
+      }
+      const parsedPengurangan = parseBooleanLike(rawPengurangan);
+      if (parsedPengurangan === undefined) {
+        return NextResponse.json({ message: "Field 'pengurangan_kouta' harus bernilai boolean true/false." }, { status: 400 });
+      }
+      payload.pengurangan_kouta = parsedPengurangan;
+    }
+
     if (Object.keys(payload).length === 0) {
       return NextResponse.json({ message: 'Tidak ada perubahan yang diberikan.' }, { status: 400 });
     }
@@ -99,6 +122,7 @@ export async function PUT(req, { params }) {
       select: {
         id_kategori_cuti: true,
         nama_kategori: true,
+        pengurangan_kouta: true,
         updated_at: true,
       },
     });
