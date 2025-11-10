@@ -13,6 +13,8 @@ import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords }
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
+const MONTH_ENUM = ['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'];
+
 /**
  * Relasi yang di-include.
  */
@@ -181,6 +183,23 @@ function resolveJenisPengajuan(input, expected) {
     };
   }
   return { ok: true, value: fallback };
+}
+
+function summarizeDatesByMonth(dates) {
+  if (!Array.isArray(dates) || dates.length === 0) return [];
+  const seenKeys = new Set();
+  const monthCounts = new Map();
+  for (const item of dates) {
+    const date = item instanceof Date ? item : item ? new Date(item) : null;
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) continue;
+    const isoKey = date.toISOString().slice(0, 10);
+    if (seenKeys.has(isoKey)) continue;
+    seenKeys.add(isoKey);
+    const monthName = MONTH_ENUM[date.getUTCMonth()];
+    if (!monthName) continue;
+    monthCounts.set(monthName, (monthCounts.get(monthName) || 0) + 1);
+  }
+  return Array.from(monthCounts.entries());
 }
 
 /* ============================ GET (List) ============================ */
@@ -410,12 +429,14 @@ export async function POST(req) {
     if (!kategori) {
       return NextResponse.json({ ok: false, message: 'Kategori cuti tidak ditemukan.' }, { status: 404 });
     }
+    const quotaAdjustments = kategori?.pengurangan_kouta ? summarizeDatesByMonth(parsedCutiDates) : [];
 
     if (handoverIds && handoverIds.length) {
       const users = await db.user.findMany({
         where: { id_user: { in: handoverIds }, deleted_at: null },
-        select: { id_user: true },
+        select: { id_kategori_cuti: true, pengurangan_kouta: true },
       });
+
       const foundIds = new Set(users.map((u) => u.id_user));
       const missing = handoverIds.filter((id) => !foundIds.has(id));
       if (missing.length) {
@@ -489,6 +510,23 @@ export async function POST(req) {
           })),
           skipDuplicates: true,
         });
+      }
+      if (quotaAdjustments.length) {
+        for (const [bulan, count] of quotaAdjustments) {
+          if (!bulan || !Number.isFinite(count) || count <= 0) continue;
+          const config = await tx.cutiKonfigurasi.findFirst({
+            where: { id_user: actorId, bulan, deleted_at: null },
+            select: { id_cuti_konfigurasi: true, kouta_cuti: true },
+          });
+          if (!config) continue;
+          const updatedQuota = config.kouta_cuti - count;
+          const normalizedQuota = updatedQuota < 0 ? 0 : updatedQuota;
+          if (normalizedQuota === config.kouta_cuti) continue;
+          await tx.cutiKonfigurasi.update({
+            where: { id_cuti_konfigurasi: config.id_cuti_konfigurasi },
+            data: { kouta_cuti: normalizedQuota },
+          });
+        }
       }
 
       return tx.pengajuanCuti.findUnique({
