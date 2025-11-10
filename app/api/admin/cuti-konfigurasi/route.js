@@ -1,38 +1,13 @@
 // app/api/admin/cuti-konfigurasi/route.js
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
-import { verifyAuthToken } from '@/lib/jwt';
-import { authenticateRequest } from '@/app/utils/auth/authUtils';
-
+import { ensureAdminAuth, guardHr } from './_helpers';
 const ALLOWED_MONTHS = new Set(['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER']);
-
-async function ensureAuth(req) {
-  /* sama seperti versi kamu */
-  const auth = req.headers.get('authorization') || '';
-  if (auth.startsWith('Bearer ')) {
-    try {
-      const payload = verifyAuthToken(auth.slice(7));
-      return { actor: { id: payload?.sub || payload?.id_user || payload?.userId, role: payload?.role, source: 'bearer' } };
-    } catch (_) {}
-  }
-  const sessionOrRes = await authenticateRequest();
-  if (sessionOrRes instanceof NextResponse) return sessionOrRes;
-  return { actor: { id: sessionOrRes.user.id, role: sessionOrRes.user.role, source: 'session' } };
-}
-function guardHr(actor) {
-  const role = String(actor?.role || '')
-    .trim()
-    .toUpperCase();
-  if (!['HR', 'OPERASIONAL', 'SUPERADMIN'].includes(role)) {
-    return NextResponse.json({ message: 'Forbidden: hanya HR/OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' }, { status: 403 });
-  }
-  return null;
-}
 
 const ALLOWED_ORDER_BY = new Set(['created_at', 'updated_at', 'bulan', 'kouta_cuti', 'user']);
 
 export async function GET(req) {
-  const auth = await ensureAuth(req);
+  const auth = await ensureAdminAuth(req);
   if (auth instanceof NextResponse) return auth;
   const forbidden = guardHr(auth.actor);
   if (forbidden) return forbidden;
@@ -99,7 +74,7 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
-  const auth = await ensureAuth(req);
+  const auth = await ensureAdminAuth(req);
   if (auth instanceof NextResponse) return auth;
   const forbidden = guardHr(auth.actor);
   if (forbidden) return forbidden;
