@@ -7,34 +7,20 @@ import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
 import { readApprovalsFromBody } from '../_utils/approvals';
 
-const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
-const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
+const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']); // selaras Prisma
+const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 const baseInclude = {
   user: {
-    select: {
-      id_user: true,
-      nama_pengguna: true,
-      email: true,
-      role: true,
-    },
+    select: { id_user: true, nama_pengguna: true, email: true, role: true },
   },
   kategori: {
-    select: {
-      id_kategori_izin_jam: true,
-      nama_kategori: true,
-    },
+    select: { id_kategori_izin_jam: true, nama_kategori: true },
   },
   handover_users: {
     include: {
       user: {
-        select: {
-          id_user: true,
-          nama_pengguna: true,
-          email: true,
-          role: true,
-          foto_profil_user: true,
-        },
+        select: { id_user: true, nama_pengguna: true, email: true, role: true, foto_profil_user: true },
       },
     },
   },
@@ -62,10 +48,8 @@ const isAdminRole = (role) => ADMIN_ROLES.has(normRole(role));
 function isNullLike(value) {
   if (value === null || value === undefined) return true;
   if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return true;
-    const lowered = trimmed.toLowerCase();
-    if (lowered === 'null' || lowered === 'undefined') return true;
+    const t = value.trim().toLowerCase();
+    if (!t || t === 'null' || t === 'undefined') return true;
   }
   return false;
 }
@@ -76,6 +60,14 @@ function normalizeLampiranInput(value) {
   return String(value).trim();
 }
 
+// Normalisasi status input (kompatibel klien lama)
+function normalizeStatusInput(value) {
+  if (value === undefined || value === null) return null;
+  const s = String(value).trim().toLowerCase();
+  const mapped = s === 'menunggu' ? 'pending' : s;
+  return APPROVE_STATUSES.has(mapped) ? mapped : null;
+}
+
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -83,35 +75,18 @@ async function ensureAuth(req) {
       const payload = verifyAuthToken(auth.slice(7));
       const id = payload?.sub || payload?.id_user || payload?.userId;
       if (id) {
-        return {
-          actor: {
-            id,
-            role: payload?.role,
-            source: 'bearer',
-          },
-        };
+        return { actor: { id, role: payload?.role, source: 'bearer' } };
       }
-    } catch (_) {
-      /* fallback ke NextAuth */
-    }
+    } catch {}
   }
 
   const sessionOrRes = await authenticateRequest();
   if (sessionOrRes instanceof NextResponse) return sessionOrRes;
 
   const id = sessionOrRes?.user?.id || sessionOrRes?.user?.id_user;
-  if (!id) {
-    return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
-  }
+  if (!id) return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
 
-  return {
-    actor: {
-      id,
-      role: sessionOrRes?.user?.role,
-      source: 'session',
-      session: sessionOrRes,
-    },
-  };
+  return { actor: { id, role: sessionOrRes?.user?.role, source: 'session', session: sessionOrRes } };
 }
 
 function parseTagUserIds(raw) {
@@ -119,9 +94,9 @@ function parseTagUserIds(raw) {
   if (raw === null) return [];
   const arr = Array.isArray(raw) ? raw : [raw];
   const set = new Set();
-  for (const value of arr) {
-    const str = String(value || '').trim();
-    if (str) set.add(str);
+  for (const v of arr) {
+    const s = String(v || '').trim();
+    if (s) set.add(s);
   }
   return Array.from(set);
 }
@@ -144,9 +119,7 @@ async function getPengajuanOr404(id) {
     where: { id_pengajuan_izin_jam: id, deleted_at: null },
     include: baseInclude,
   });
-  if (!pengajuan) {
-    return NextResponse.json({ message: 'Pengajuan izin jam tidak ditemukan.' }, { status: 404 });
-  }
+  if (!pengajuan) return NextResponse.json({ message: 'Pengajuan izin jam tidak ditemukan.' }, { status: 404 });
   return pengajuan;
 }
 
@@ -167,9 +140,7 @@ export async function PUT(req, { params }) {
 
   const actorId = auth.actor?.id;
   const actorRole = auth.actor?.role;
-  if (!actorId) {
-    return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
-  }
+  if (!actorId) return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
 
   try {
     const pengajuan = await getPengajuanOr404(params.id);
@@ -181,6 +152,7 @@ export async function PUT(req, { params }) {
 
     const parsed = await parseRequestBody(req);
     const body = parsed.body || {};
+
     let approvalsInput;
     try {
       approvalsInput = readApprovalsFromBody(body);
@@ -188,33 +160,23 @@ export async function PUT(req, { params }) {
       if (err instanceof NextResponse) return err;
       throw err;
     }
+
     const data = {};
 
     if (Object.prototype.hasOwnProperty.call(body, 'id_user')) {
       const nextId = String(body.id_user || '').trim();
-      if (!nextId) {
-        return NextResponse.json({ message: "Field 'id_user' tidak boleh kosong." }, { status: 400 });
-      }
+      if (!nextId) return NextResponse.json({ message: "Field 'id_user' tidak boleh kosong." }, { status: 400 });
       if (!isAdminRole(actorRole) && nextId !== pengajuan.id_user) {
         return NextResponse.json({ message: 'Forbidden.' }, { status: 403 });
       }
-
-      const targetUser = await db.user.findFirst({
-        where: { id_user: nextId, deleted_at: null },
-        select: { id_user: true },
-      });
-      if (!targetUser) {
-        return NextResponse.json({ message: 'User tujuan tidak ditemukan.' }, { status: 404 });
-      }
-
+      const targetUser = await db.user.findFirst({ where: { id_user: nextId, deleted_at: null }, select: { id_user: true } });
+      if (!targetUser) return NextResponse.json({ message: 'User tujuan tidak ditemukan.' }, { status: 404 });
       data.id_user = nextId;
     }
 
     if (Object.prototype.hasOwnProperty.call(body, 'tanggal_izin')) {
       const parsed = parseDateOnlyToUTC(body.tanggal_izin);
-      if (!parsed) {
-        return NextResponse.json({ message: "Field 'tanggal_izin' harus berupa tanggal yang valid." }, { status: 400 });
-      }
+      if (!parsed) return NextResponse.json({ message: "Field 'tanggal_izin' harus berupa tanggal yang valid." }, { status: 400 });
       data.tanggal_izin = parsed;
     }
 
@@ -225,18 +187,14 @@ export async function PUT(req, { params }) {
 
     if (Object.prototype.hasOwnProperty.call(body, 'jam_mulai')) {
       const parsed = parseDateTimeToUTC(body.jam_mulai);
-      if (!parsed) {
-        return NextResponse.json({ message: "Field 'jam_mulai' harus berupa waktu yang valid." }, { status: 400 });
-      }
+      if (!parsed) return NextResponse.json({ message: "Field 'jam_mulai' harus berupa waktu yang valid." }, { status: 400 });
       data.jam_mulai = parsed;
       jamMulai = parsed;
     }
 
     if (Object.prototype.hasOwnProperty.call(body, 'jam_selesai')) {
       const parsed = parseDateTimeToUTC(body.jam_selesai);
-      if (!parsed) {
-        return NextResponse.json({ message: "Field 'jam_selesai' harus berupa waktu yang valid." }, { status: 400 });
-      }
+      if (!parsed) return NextResponse.json({ message: "Field 'jam_selesai' harus berupa waktu yang valid." }, { status: 400 });
       data.jam_selesai = parsed;
       jamSelesai = parsed;
     }
@@ -244,14 +202,13 @@ export async function PUT(req, { params }) {
     if (jamMulai && jamSelesai && jamSelesai <= jamMulai) {
       return NextResponse.json({ message: 'jam_selesai harus lebih besar dari jam_mulai.' }, { status: 400 });
     }
+
     if (Object.prototype.hasOwnProperty.call(body, 'tanggal_pengganti')) {
       if (isNullLike(body.tanggal_pengganti)) {
         data.tanggal_pengganti = null;
       } else {
         const parsed = parseDateOnlyToUTC(body.tanggal_pengganti);
-        if (!parsed) {
-          return NextResponse.json({ message: "Field 'tanggal_pengganti' harus berupa tanggal yang valid." }, { status: 400 });
-        }
+        if (!parsed) return NextResponse.json({ message: "Field 'tanggal_pengganti' harus berupa tanggal yang valid." }, { status: 400 });
         data.tanggal_pengganti = parsed;
       }
     }
@@ -262,9 +219,7 @@ export async function PUT(req, { params }) {
         jamMulaiPengganti = null;
       } else {
         const parsed = parseDateTimeToUTC(body.jam_mulai_pengganti);
-        if (!parsed) {
-          return NextResponse.json({ message: "Field 'jam_mulai_pengganti' harus berupa waktu yang valid." }, { status: 400 });
-        }
+        if (!parsed) return NextResponse.json({ message: "Field 'jam_mulai_pengganti' harus berupa waktu yang valid." }, { status: 400 });
         data.jam_mulai_pengganti = parsed;
         jamMulaiPengganti = parsed;
       }
@@ -276,9 +231,7 @@ export async function PUT(req, { params }) {
         jamSelesaiPengganti = null;
       } else {
         const parsed = parseDateTimeToUTC(body.jam_selesai_pengganti);
-        if (!parsed) {
-          return NextResponse.json({ message: "Field 'jam_selesai_pengganti' harus berupa waktu yang valid." }, { status: 400 });
-        }
+        if (!parsed) return NextResponse.json({ message: "Field 'jam_selesai_pengganti' harus berupa waktu yang valid." }, { status: 400 });
         data.jam_selesai_pengganti = parsed;
         jamSelesaiPengganti = parsed;
       }
@@ -290,17 +243,13 @@ export async function PUT(req, { params }) {
 
     if (Object.prototype.hasOwnProperty.call(body, 'id_kategori_izin_jam')) {
       const kategoriId = String(body.id_kategori_izin_jam || '').trim();
-      if (!kategoriId) {
-        return NextResponse.json({ message: "Field 'id_kategori_izin_jam' tidak boleh kosong." }, { status: 400 });
-      }
+      if (!kategoriId) return NextResponse.json({ message: "Field 'id_kategori_izin_jam' tidak boleh kosong." }, { status: 400 });
 
       const kategori = await db.kategoriIzinJam.findFirst({
         where: { id_kategori_izin_jam: kategoriId, deleted_at: null },
         select: { id_kategori_izin_jam: true },
       });
-      if (!kategori) {
-        return NextResponse.json({ message: 'Kategori izin jam tidak ditemukan.' }, { status: 404 });
-      }
+      if (!kategori) return NextResponse.json({ message: 'Kategori izin jam tidak ditemukan.' }, { status: 404 });
 
       data.id_kategori_izin_jam = kategoriId;
     }
@@ -314,13 +263,9 @@ export async function PUT(req, { params }) {
     }
 
     if (Object.prototype.hasOwnProperty.call(body, 'status')) {
-      const statusRaw = String(body.status || '')
-        .trim()
-        .toLowerCase();
-      if (!APPROVE_STATUSES.has(statusRaw)) {
-        return NextResponse.json({ message: 'status tidak valid.' }, { status: 400 });
-      }
-      data.status = statusRaw;
+      const normalized = normalizeStatusInput(body.status);
+      if (!normalized) return NextResponse.json({ message: 'status tidak valid.' }, { status: 400 });
+      data.status = normalized;
     }
 
     if (Object.prototype.hasOwnProperty.call(body, 'current_level')) {
@@ -328,9 +273,7 @@ export async function PUT(req, { params }) {
         data.current_level = null;
       } else {
         const levelNumber = Number(body.current_level);
-        if (!Number.isFinite(levelNumber)) {
-          return NextResponse.json({ message: 'current_level harus berupa angka.' }, { status: 400 });
-        }
+        if (!Number.isFinite(levelNumber)) return NextResponse.json({ message: 'current_level harus berupa angka.' }, { status: 400 });
         data.current_level = levelNumber;
       }
     }
@@ -351,9 +294,8 @@ export async function PUT(req, { params }) {
     }
 
     const tagUserIds = parseTagUserIds(body.tag_user_ids);
-    if (tagUserIds !== undefined) {
-      await validateTaggedUsers(tagUserIds);
-    }
+    if (tagUserIds !== undefined) await validateTaggedUsers(tagUserIds);
+
     const existingApprovals = Array.isArray(pengajuan.approvals) ? pengajuan.approvals : [];
     const updated = await db.$transaction(async (tx) => {
       const saved = await tx.pengajuanIzinJam.update({
@@ -371,28 +313,18 @@ export async function PUT(req, { params }) {
 
         if (tagUserIds.length) {
           const existing = await tx.handoverIzinJam.findMany({
-            where: {
-              id_pengajuan_izin_jam: saved.id_pengajuan_izin_jam,
-              id_user_tagged: { in: tagUserIds },
-            },
+            where: { id_pengajuan_izin_jam: saved.id_pengajuan_izin_jam, id_user_tagged: { in: tagUserIds } },
             select: { id_user_tagged: true },
           });
-          const existingSet = new Set(existing.map((item) => item.id_user_tagged));
-          const toCreate = tagUserIds
-            .filter((id) => !existingSet.has(id))
-            .map((id) => ({
-              id_pengajuan_izin_jam: saved.id_pengajuan_izin_jam,
-              id_user_tagged: id,
-            }));
+          const existingSet = new Set(existing.map((i) => i.id_user_tagged));
+          const toCreate = tagUserIds.filter((id) => !existingSet.has(id)).map((id) => ({ id_pengajuan_izin_jam: saved.id_pengajuan_izin_jam, id_user_tagged: id }));
 
-          if (toCreate.length) {
-            await tx.handoverIzinJam.createMany({ data: toCreate, skipDuplicates: true });
-          }
+          if (toCreate.length) await tx.handoverIzinJam.createMany({ data: toCreate, skipDuplicates: true });
         }
       }
 
       if (approvalsInput !== undefined) {
-        const existingMap = new Map(existingApprovals.map((item) => [item.id_approval_pengajuan_izin_jam, item]));
+        const existingMap = new Map(existingApprovals.map((it) => [it.id_approval_pengajuan_izin_jam, it]));
         const seenIds = new Set();
         const toCreate = [];
         const toUpdate = [];
@@ -411,14 +343,11 @@ export async function PUT(req, { params }) {
           }
         });
 
-        const toDeleteIds = existingApprovals.filter((item) => !seenIds.has(item.id_approval_pengajuan_izin_jam)).map((item) => item.id_approval_pengajuan_izin_jam);
+        const toDeleteIds = existingApprovals.filter((it) => !seenIds.has(it.id_approval_pengajuan_izin_jam)).map((it) => it.id_approval_pengajuan_izin_jam);
 
         if (toDeleteIds.length) {
           await tx.approvalPengajuanIzinJam.deleteMany({
-            where: {
-              id_pengajuan_izin_jam: saved.id_pengajuan_izin_jam,
-              id_approval_pengajuan_izin_jam: { in: toDeleteIds },
-            },
+            where: { id_pengajuan_izin_jam: saved.id_pengajuan_izin_jam, id_approval_pengajuan_izin_jam: { in: toDeleteIds } },
           });
         }
 
@@ -431,7 +360,7 @@ export async function PUT(req, { params }) {
                   level: approval.level,
                   approver_user_id: approval.approver_user_id,
                   approver_role: approval.approver_role,
-                  decision: 'pending',
+                  decision: 'pending', // reset sesuai enum Prisma
                   decided_at: null,
                   note: null,
                 },
@@ -462,9 +391,7 @@ export async function PUT(req, { params }) {
     return NextResponse.json({ message: 'Pengajuan izin jam berhasil diperbarui.', data: updated, upload: uploadMeta || undefined });
   } catch (err) {
     if (err instanceof NextResponse) return err;
-    if (err?.code === 'P2003') {
-      return NextResponse.json({ message: 'Data referensi tidak valid.' }, { status: 400 });
-    }
+    if (err?.code === 'P2003') return NextResponse.json({ message: 'Data referensi tidak valid.' }, { status: 400 });
     console.error('PUT /mobile/pengajuan-izin-jam/:id error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
@@ -476,9 +403,7 @@ export async function DELETE(req, { params }) {
 
   const actorId = auth.actor?.id;
   const actorRole = auth.actor?.role;
-  if (!actorId) {
-    return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
-  }
+  if (!actorId) return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
 
   try {
     const pengajuan = await getPengajuanOr404(params.id);

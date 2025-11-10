@@ -11,12 +11,10 @@ import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from './_utils/approvals';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']);
-// Menyesuaikan dengan skema Role terbaru
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 /**
- * Mendefinisikan data relasi yang akan diambil.
- * Sesuai skema: 'tanggal_list' (merujuk ke PengajuanCutiTanggal) disertakan.
+ * Relasi yang di-include.
  */
 export const pengajuanInclude = {
   user: {
@@ -59,10 +57,10 @@ export const pengajuanInclude = {
       note: true,
     },
   },
-  // Sesuai skema: ambil daftar tanggal dari relasi
+  // daftar tanggal cuti
   tanggal_list: {
     select: {
-      tanggal_cuti: true, // Field 'tanggal_cuti' dari model 'PengajuanCutiTanggal'
+      tanggal_cuti: true,
     },
     orderBy: { tanggal_cuti: 'asc' },
   },
@@ -140,14 +138,12 @@ export async function ensureAuth(req) {
 }
 
 /**
- * Normalisasi status, termasuk mapping 'menunggu' (legacy) ke 'pending' (skema).
+ * Normalisasi status: tidak ada lagi 'menunggu' (legacy dihapus).
  */
 export function normalizeStatus(value) {
   if (!value) return null;
   const raw = String(value).trim().toLowerCase();
-  const mapped = raw === 'menunggu' ? 'pending' : raw;
-  if (!APPROVE_STATUSES.has(mapped)) return null;
-  return mapped;
+  return APPROVE_STATUSES.has(raw) ? raw : null;
 }
 
 export function parseDateQuery(value) {
@@ -159,7 +155,6 @@ export function parseDateQuery(value) {
 
 export function sanitizeHandoverIds(ids) {
   if (ids === undefined) return undefined;
-  // Menangani input '[]' dari form-data
   if (typeof ids === 'string' && ids.trim() === '[]') return [];
   const arr = Array.isArray(ids) ? ids : [ids];
   const unique = new Set();
@@ -213,12 +208,12 @@ export async function GET(req) {
 
     const kategoriId = (searchParams.get('id_kategori_cuti') || '').trim();
 
-    // Terima parameter filter 'tanggal_mulai' (ini BUKAN field schema, ini parameter query)
-    const tanggalMulaiEqParam = searchParams.get('tanggal_mulai');
-    const tanggalMulaiFromParam = searchParams.get('tanggal_mulai_from');
-    const tanggalMulaiToParam = searchParams.get('tanggal_mulai_to');
+    // Parameter tanggal (rename: tanggal_mulai* -> tanggal_cuti*)
+    const tanggalCutiEqParam = searchParams.get('tanggal_cuti') ?? searchParams.get('tanggal_mulai');
+    const tanggalCutiFromParam = searchParams.get('tanggal_cuti_from') ?? searchParams.get('tanggal_mulai_from');
+    const tanggalCutiToParam = searchParams.get('tanggal_cuti_to') ?? searchParams.get('tanggal_mulai_to');
 
-    // Filter untuk field 'tanggal_masuk_kerja' (ini ADALAH field schema)
+    // Filter field tunggal 'tanggal_masuk_kerja'
     const tanggalMasukEqParam = searchParams.get('tanggal_masuk_kerja');
     const tanggalMasukFromParam = searchParams.get('tanggal_masuk_kerja_from');
     const tanggalMasukToParam = searchParams.get('tanggal_masuk_kerja_to');
@@ -235,33 +230,28 @@ export async function GET(req) {
     }
 
     if (status) {
-      if (status === 'pending') {
-        where.status = { in: ['pending', 'menunggu'] }; // Tetap dukung legacy 'menunggu'
-      } else {
-        where.status = status;
-      }
+      // ❌ tak ada lagi 'menunggu'
+      where.status = status; // 'pending' | 'disetujui' | 'ditolak'
     }
 
     if (kategoriId) where.id_kategori_cuti = kategoriId;
 
-    // Filter 'tanggal_mulai' (parameter) ke relasi 'tanggal_list' (skema)
-    if (tanggalMulaiEqParam) {
-      const parsed = parseDateQuery(tanggalMulaiEqParam);
+    // Filter tanggal_cuti via relasi tanggal_list
+    if (tanggalCutiEqParam) {
+      const parsed = parseDateQuery(tanggalCutiEqParam);
       if (!parsed) {
-        return NextResponse.json({ ok: false, message: 'Parameter tanggal_mulai tidak valid.' }, { status: 400 });
+        return NextResponse.json({ ok: false, message: 'Parameter tanggal_cuti tidak valid.' }, { status: 400 });
       }
-      // Temukan pengajuan yang memiliki minimal 1 tanggal cuti yang cocok
       where.tanggal_list = { some: { tanggal_cuti: parsed } };
-    } else if (tanggalMulaiFromParam || tanggalMulaiToParam) {
-      const gte = parseDateQuery(tanggalMulaiFromParam);
-      const lte = parseDateQuery(tanggalMulaiToParam);
-      if (tanggalMulaiFromParam && !gte) {
-        return NextResponse.json({ ok: false, message: 'Parameter tanggal_mulai_from tidak valid.' }, { status: 400 });
+    } else if (tanggalCutiFromParam || tanggalCutiToParam) {
+      const gte = parseDateQuery(tanggalCutiFromParam);
+      const lte = parseDateQuery(tanggalCutiToParam);
+      if (tanggalCutiFromParam && !gte) {
+        return NextResponse.json({ ok: false, message: 'Parameter tanggal_cuti_from tidak valid.' }, { status: 400 });
       }
-      if (tanggalMulaiToParam && !lte) {
-        return NextResponse.json({ ok: false, message: 'Parameter tanggal_mulai_to tidak valid.' }, { status: 400 });
+      if (tanggalCutiToParam && !lte) {
+        return NextResponse.json({ ok: false, message: 'Parameter tanggal_cuti_to tidak valid.' }, { status: 400 });
       }
-      // Temukan pengajuan yang memiliki minimal 1 tanggal cuti dalam rentang
       where.tanggal_list = {
         some: {
           tanggal_cuti: {
@@ -272,7 +262,7 @@ export async function GET(req) {
       };
     }
 
-    // Filter 'tanggal_masuk_kerja' (field skema)
+    // Filter 'tanggal_masuk_kerja'
     if (tanggalMasukEqParam) {
       const parsed = parseDateQuery(tanggalMasukEqParam);
       if (!parsed) {
@@ -305,21 +295,20 @@ export async function GET(req) {
       }),
     ]);
 
-    // Transformasi: Hitung 'tanggal_mulai' dan 'tanggal_selesai' (sebagai nilai turunan)
-    // dari 'tanggal_list' untuk dikirim ke klien.
+    // Transformasi: kirim tanggal_cuti (awal turunan), tanggal_selesai (akhir turunan)
     const items = rawItems.map((item) => {
-      const dates = (item.tanggal_list || []).map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))).sort((a, b) => a.getTime() - b.getTime()); // Gunakan .getTime() untuk sorting
+      const dates = (item.tanggal_list || []).map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))).sort((a, b) => a.getTime() - b.getTime());
 
-      const tanggal_mulai_derived = dates.length ? dates[0] : null;
+      const tanggal_cuti_derived = dates.length ? dates[0] : null;
       const tanggal_selesai_derived = dates.length ? dates[dates.length - 1] : null;
 
       const { tanggal_list: _unused, ...rest } = item;
 
       return {
         ...rest,
-        tanggal_mulai: tanggal_mulai_derived, // Nilai turunan (bukan field DB)
-        tanggal_selesai: tanggal_selesai_derived, // Nilai turunan (bukan field DB)
-        tanggal_list: dates, // Kirim array tanggal (bukan objek relasi)
+        tanggal_cuti: tanggal_cuti_derived,
+        tanggal_selesai: tanggal_selesai_derived,
+        tanggal_list: dates,
       };
     });
 
@@ -360,10 +349,16 @@ export async function POST(req) {
 
   try {
     const id_kategori_cuti = String(body?.id_kategori_cuti || '').trim();
-    // Terima 'tanggal_mulai' sebagai parameter input dari body
-    const tanggalMulaiInput = body?.tanggal_mulai;
-    // Terima 'tanggal_masuk_kerja' (field skema)
+
+    // Input: tanggal_cuti[] (prefer) / legacy tanggal_mulai[]
+    const tanggalCutiInput =
+      body?.['tanggal_cuti[]'] ??
+      body?.tanggal_cuti ??
+      body?.['tanggal_mulai[]'] ?? // legacy
+      body?.tanggal_mulai; // legacy
+
     const tanggalMasukInput = body?.tanggal_masuk_kerja;
+
     const keperluan = body?.keperluan === undefined || body?.keperluan === null ? null : String(body.keperluan);
     const handover = body?.handover === undefined || body?.handover === null ? null : String(body.handover);
 
@@ -377,32 +372,32 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, message: 'id_kategori_cuti wajib diisi.' }, { status: 400 });
     }
 
-    // Mendukung input array untuk 'tanggal_mulai' (parameter) dan 'tanggal_masuk_kerja' (field)
-    const tanggalAwalArray = Array.isArray(tanggalMulaiInput) ? tanggalMulaiInput : [tanggalMulaiInput];
-    const tanggalMasukArray = Array.isArray(tanggalMasukInput) ? tanggalMasukInput : [tanggalMasukInput];
-
-    if (tanggalAwalArray.length > 1 && tanggalMasukArray.length > 1 && tanggalAwalArray.length !== tanggalMasukArray.length) {
-      return NextResponse.json({ ok: false, message: "Jumlah elemen pada 'tanggal_mulai' dan 'tanggal_masuk_kerja' tidak sesuai." }, { status: 400 });
+    // tanggal_masuk_kerja harus single
+    if (Array.isArray(tanggalMasukInput)) {
+      return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja harus berupa satu tanggal, bukan array.' }, { status: 400 });
+    }
+    const tanggalMasukKerja = parseDateOnlyToUTC(tanggalMasukInput);
+    if (!tanggalMasukKerja) {
+      return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja tidak valid.' }, { status: 400 });
     }
 
-    const datePairs = []; // Pasangan [tanggalCutiAwal, tanggalMasukKerja]
-    for (let i = 0; i < tanggalAwalArray.length; i++) {
-      const cutiAwalRaw = tanggalAwalArray[i];
-      const masukRaw = tanggalMasukArray.length > 1 ? tanggalMasukArray[i] : tanggalMasukArray[0];
+    // tanggal_cuti[]
+    const tanggalCutiArray = Array.isArray(tanggalCutiInput) ? tanggalCutiInput : [tanggalCutiInput];
+    const parsedCutiDates = [];
 
-      const tanggalCutiAwal = parseDateOnlyToUTC(cutiAwalRaw); // Ini parameter, bukan field
-      if (!tanggalCutiAwal) {
-        return NextResponse.json({ ok: false, message: 'tanggal_mulai tidak valid.' }, { status: 400 });
+    if (tanggalCutiArray.length === 0 || tanggalCutiArray[0] === undefined) {
+      return NextResponse.json({ ok: false, message: 'tanggal_cuti wajib diisi.' }, { status: 400 });
+    }
+
+    for (const raw of tanggalCutiArray) {
+      const tanggalCuti = parseDateOnlyToUTC(raw);
+      if (!tanggalCuti) {
+        return NextResponse.json({ ok: false, message: `Tanggal cuti '${raw}' tidak valid.` }, { status: 400 });
       }
-      const tanggalMasukKerja = parseDateOnlyToUTC(masukRaw); // Ini field skema
-      if (!tanggalMasukKerja) {
-        return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja tidak valid.' }, { status: 400 });
+      if (tanggalMasukKerja <= tanggalCuti) {
+        return NextResponse.json({ ok: false, message: `Tanggal cuti '${raw}' harus sebelum tanggal_masuk_kerja.` }, { status: 400 });
       }
-      if (tanggalMasukKerja <= tanggalCutiAwal) {
-        // Harus '<=' karena tanggal masuk adalah hari PERTAMA kembali
-        return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja tidak boleh sebelum atau sama dengan tanggal_mulai.' }, { status: 400 });
-      }
-      datePairs.push({ tanggalCutiAwal, tanggalMasukKerja });
+      parsedCutiDates.push(tanggalCuti);
     }
 
     const handoverIdsInput = body?.['handover_tag_user_ids[]'] ?? body?.handover_tag_user_ids;
@@ -458,90 +453,62 @@ export async function POST(req) {
       }
     }
 
-    // Proses pembuatan data dalam satu transaksi
-    const fullPengajuans = await db.$transaction(async (tx) => {
-      const createdRecords = [];
-      for (const { tanggalCutiAwal, tanggalMasukKerja } of datePairs) {
-        // 1. Buat data di tabel PengajuanCuti
-        // Sesuai skema: HANYA 'tanggal_masuk_kerja' yang disimpan.
-        const created = await tx.pengajuanCuti.create({
-          data: {
-            id_user: actorId,
-            id_kategori_cuti,
-            keperluan,
-            tanggal_masuk_kerja: tanggalMasukKerja, // Field skema
-            // 'tanggal_mulai' TIDAK DISIMPAN di sini
-            handover,
-            jenis_pengajuan,
-            lampiran_cuti_url: lampiranUrl,
-          },
+    // Transaksi: create pengajuan + tanggal_list + approvals + handover
+    const fullPengajuan = await db.$transaction(async (tx) => {
+      const created = await tx.pengajuanCuti.create({
+        data: {
+          id_user: actorId,
+          id_kategori_cuti,
+          keperluan,
+          tanggal_masuk_kerja: tanggalMasukKerja,
+          handover,
+          jenis_pengajuan,
+          lampiran_cuti_url: lampiranUrl,
+        },
+      });
+
+      if (parsedCutiDates.length) {
+        await tx.pengajuanCutiTanggal.createMany({
+          data: parsedCutiDates.map((tgl) => ({
+            id_pengajuan_cuti: created.id_pengajuan_cuti,
+            tanggal_cuti: tgl,
+          })),
+          skipDuplicates: true,
         });
-
-        // 2. Hitung rentang tanggal cuti
-        const dates = [];
-        const current = new Date(tanggalCutiAwal.getTime());
-        // Loop sampai 1 hari SEBELUM tanggal masuk
-        while (current < tanggalMasukKerja) {
-          dates.push(new Date(current.getTime()));
-          current.setUTCDate(current.getUTCDate() + 1);
-        }
-
-        // 3. Simpan rentang tanggal ke tabel relasi 'PengajuanCutiTanggal'
-        if (dates.length) {
-          await tx.pengajuanCutiTanggal.createMany({
-            data: dates.map((tgl) => ({
-              id_pengajuan_cuti: created.id_pengajuan_cuti,
-              tanggal_cuti: tgl, // Field skema relasi
-            })),
-            skipDuplicates: true,
-          });
-        }
-
-        // 4. Simpan relasi Approvals
-        if (approvalsInput !== undefined) {
-          await syncApprovalRecords(tx, created.id_pengajuan_cuti, approvalsInput);
-        }
-
-        // 5. Simpan relasi Handover
-        if (handoverIds && handoverIds.length) {
-          await tx.handoverCuti.createMany({
-            data: handoverIds.map((id_user_tagged) => ({
-              id_pengajuan_cuti: created.id_pengajuan_cuti,
-              id_user_tagged,
-            })),
-            skipDuplicates: true,
-          });
-        }
-        createdRecords.push(created);
       }
 
-      // Ambil data lengkap untuk dikirim kembali
-      return Promise.all(
-        createdRecords.map((item) =>
-          tx.pengajuanCuti.findUnique({
-            where: { id_pengajuan_cuti: item.id_pengajuan_cuti },
-            include: pengajuanInclude, // 'pengajuanInclude' sudah berisi 'tanggal_list'
-          })
-        )
-      );
+      if (approvalsInput !== undefined) {
+        await syncApprovalRecords(tx, created.id_pengajuan_cuti, approvalsInput);
+      }
+
+      if (handoverIds && handoverIds.length) {
+        await tx.handoverCuti.createMany({
+          data: handoverIds.map((id_user_tagged) => ({
+            id_pengajuan_cuti: created.id_pengajuan_cuti,
+            id_user_tagged,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      return tx.pengajuanCuti.findUnique({
+        where: { id_pengajuan_cuti: created.id_pengajuan_cuti },
+        include: pengajuanInclude,
+      });
     });
 
-    // Kirim notifikasi
-    for (const fullPengajuan of fullPengajuans) {
-      if (!fullPengajuan) continue;
+    // Notifikasi (pemohon & handover)
+    if (fullPengajuan) {
       const deeplink = `/pengajuan-cuti/${fullPengajuan.id_pengajuan_cuti}`;
 
-      // Ambil tanggal cuti pertama DARI RELASI 'tanggal_list'
-      const rawDates = (fullPengajuan.tanggal_list || []).map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))).sort((a, b) => a.getTime() - b.getTime()); // Gunakan .getTime()
+      const rawDates = (fullPengajuan.tanggal_list || []).map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))).sort((a, b) => a.getTime() - b.getTime());
       const tanggalCutiPertama = rawDates.length ? rawDates[0] : null;
 
       const basePayload = {
         nama_pemohon: fullPengajuan.user?.nama_pengguna || 'Rekan',
         kategori_cuti: fullPengajuan.kategori_cuti?.nama_kategori || '-',
-        // Gunakan nilai turunan 'tanggalCutiPertama' untuk notifikasi
-        tanggal_mulai: formatDateISO(tanggalCutiPertama),
-        tanggal_mulai_display: formatDateDisplay(tanggalCutiPertama),
-        // Gunakan field 'tanggal_masuk_kerja' dari skema
+        tanggal_cuti: formatDateISO(tanggalCutiPertama),
+        tanggal_cuti_display: formatDateDisplay(tanggalCutiPertama),
         tanggal_masuk_kerja: formatDateISO(fullPengajuan.tanggal_masuk_kerja),
         tanggal_masuk_kerja_display: formatDateDisplay(fullPengajuan.tanggal_masuk_kerja),
         keperluan: fullPengajuan.keperluan || '-',
@@ -559,7 +526,7 @@ export async function POST(req) {
           if (!taggedId || notifiedUsers.has(taggedId)) continue;
           notifiedUsers.add(taggedId);
           const overrideTitle = `${basePayload.nama_pemohon} mengajukan cuti`;
-          const overrideBody = `${basePayload.nama_pemohon} menandai Anda sebagai handover cuti (${basePayload.kategori_cuti}) pada ${basePayload.tanggal_mulai_display}.`;
+          const overrideBody = `${basePayload.nama_pemohon} menandai Anda sebagai handover cuti (${basePayload.kategori_cuti}) pada ${basePayload.tanggal_cuti_display}.`;
           notifPromises.push(
             sendNotification(
               'LEAVE_HANDOVER_TAGGED',
@@ -579,10 +546,10 @@ export async function POST(req) {
       }
       if (fullPengajuan.id_user && !notifiedUsers.has(fullPengajuan.id_user)) {
         const overrideTitle = 'Pengajuan cuti berhasil dikirim';
-        const overrideBody = `Pengajuan cuti ${basePayload.kategori_cuti} pada ${basePayload.tanggal_mulai_display} telah berhasil dibuat.`;
+        const overrideBody = `Pengajuan cuti ${basePayload.kategori_cuti} pada ${basePayload.tanggal_cuti_display} telah berhasil dibuat.`;
         notifPromises.push(
           sendNotification(
-            'LEAVE_HANDOVER_TAGGED', // Menggunakan trigger yang ada
+            'LEAVE_HANDOVER_TAGGED',
             fullPengajuan.id_user,
             {
               ...basePayload,
@@ -604,9 +571,8 @@ export async function POST(req) {
 
     return NextResponse.json({
       ok: true,
-      message: fullPengajuans.length > 1 ? `Berhasil membuat ${fullPengajuans.length} pengajuan cuti.` : 'Pengajuan cuti berhasil dibuat.',
-      // Kembalikan data lengkap (termasuk 'tanggal_list')
-      data: fullPengajuans.length === 1 ? fullPengajuans[0] : fullPengajuans,
+      message: 'Pengajuan cuti berhasil dibuat.',
+      data: fullPengajuan,
       upload: uploadMeta || undefined,
     });
   } catch (err) {

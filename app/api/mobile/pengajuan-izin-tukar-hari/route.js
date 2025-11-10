@@ -1,36 +1,83 @@
+export const runtime = 'nodejs';
+
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
-import { parseDateOnlyToUTC, startOfUTCDay, endOfUTCDay } from '@/helpers/date-helper';
-import { sendNotification } from '@/app/utils/services/notificationService';
-import { parseRequestBody, findFileInBody, isNullLike } from '@/app/api/_utils/requestBody';
+import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 import storageClient from '@/app/api/_utils/storageClient';
-import { extractApprovalsFromBody, validateApprovalEntries } from '@/app/api/mobile/_utils/approvalValidation';
+import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
+import { sendNotification } from '@/app/utils/services/notificationService';
 
-const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending', 'menunggu']);
-const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
+const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']); // ❗ tanpa 'menunggu'
+const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
-const baseInclude = {
-  user: {
-    select: {
-      id_user: true,
-      nama_pengguna: true,
-      email: true,
-      role: true,
-    },
-  },
+const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
+  day: '2-digit',
+  month: 'long',
+  year: 'numeric',
+});
+
+const normRole = (role) =>
+  String(role || '')
+    .trim()
+    .toUpperCase();
+const canManageAll = (role) => ADMIN_ROLES.has(normRole(role));
+
+function normalizeStatus(value) {
+  if (!value) return null;
+  const raw = String(value).trim().toLowerCase();
+  return APPROVE_STATUSES.has(raw) ? raw : null;
+}
+
+function formatDateISO(value) {
+  if (!value) return '-';
+  try {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '-';
+    return d.toISOString().slice(0, 10);
+  } catch {
+    return '-';
+  }
+}
+
+function formatDateDisplay(value) {
+  if (!value) return '-';
+  try {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '-';
+    return dateDisplayFormatter.format(d);
+  } catch {
+    return '-';
+  }
+}
+
+export async function ensureAuth(req) {
+  const auth = req.headers.get('authorization') || '';
+  if (auth.startsWith('Bearer ')) {
+    try {
+      const payload = verifyAuthToken(auth.slice(7).trim());
+      const id = payload?.sub || payload?.id_user || payload?.userId || payload?.id;
+      if (id) {
+        return { actor: { id, role: payload?.role, source: 'bearer' } };
+      }
+    } catch {}
+  }
+
+  const sessionOrRes = await authenticateRequest();
+  if (sessionOrRes instanceof NextResponse) return sessionOrRes;
+
+  const id = sessionOrRes?.user?.id || sessionOrRes?.user?.id_user;
+  if (!id) return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
+
+  return { actor: { id, role: sessionOrRes?.user?.role, source: 'session' } };
+}
+
+export const izinInclude = {
+  user: { select: { id_user: true, nama_pengguna: true, email: true, role: true } },
   handover_users: {
     include: {
-      user: {
-        select: {
-          id_user: true,
-          nama_pengguna: true,
-          email: true,
-          role: true,
-          foto_profil_user: true,
-        },
-      },
+      user: { select: { id_user: true, nama_pengguna: true, email: true, role: true, foto_profil_user: true } },
     },
   },
   approvals: {
@@ -46,551 +93,472 @@ const baseInclude = {
       note: true,
     },
   },
-  // Pull all swap pairs associated with this submission.  Only the date
-  // fields and optional note are needed here; by ordering on the
-  // `hari_izin` field, the first element will represent the earliest
-  // swap.  Clients can compute their own display values from these
-  // entries rather than relying on deprecated scalar columns.
   pairs: {
-    select: {
-      hari_izin: true,
-      hari_pengganti: true,
-      catatan_pair: true,
-    },
+    select: { id_izin_tukar_hari_pair: true, hari_izin: true, hari_pengganti: true, catatan_pair: true },
     orderBy: { hari_izin: 'asc' },
   },
 };
 
-const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
-  day: '2-digit',
-  month: 'long',
-  year: 'numeric',
-});
-
-const normRole = (role) =>
-  String(role || '')
-    .trim()
-    .toUpperCase();
-const canManageAll = (role) => ADMIN_ROLES.has(normRole(role));
-
-function formatDateISO(value) {
-  if (!value) return '-';
-  try {
-    return value.toISOString().split('T')[0];
-  } catch (err) {
-    try {
-      const asDate = new Date(value);
-      if (Number.isNaN(asDate.getTime())) return '-';
-      return asDate.toISOString().split('T')[0];
-    } catch (_) {
-      return '-';
-    }
-  }
+function parseDateQuery(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  return parseDateOnlyToUTC(s);
 }
 
-function formatDateDisplay(value) {
-  if (!value) return '-';
-  try {
-    return dateDisplayFormatter.format(value);
-  } catch (err) {
-    try {
-      const asDate = new Date(value);
-      if (Number.isNaN(asDate.getTime())) return '-';
-      return dateDisplayFormatter.format(asDate);
-    } catch (_) {
-      return '-';
-    }
+function sanitizeHandoverIds(ids) {
+  if (ids === undefined) return undefined;
+  if (typeof ids === 'string' && ids.trim() === '[]') return [];
+  const arr = Array.isArray(ids) ? ids : [ids];
+  const unique = new Set();
+  for (const raw of arr) {
+    const val = String(raw || '').trim();
+    if (!val) continue;
+    unique.add(val);
   }
+  return Array.from(unique);
 }
 
-async function ensureAuth(req) {
-  const auth = req.headers.get('authorization') || '';
-  if (auth.startsWith('Bearer ')) {
-    try {
-      const payload = verifyAuthToken(auth.slice(7));
-      const id = payload?.sub || payload?.id_user || payload?.userId;
-      if (id) {
-        return {
-          actor: {
-            id,
-            role: payload?.role,
-            source: 'bearer',
-          },
-        };
+/**
+ * Parser serbaguna untuk input pairs. Mendukung:
+ * - JSON body: { pairs: [{ hari_izin, hari_pengganti, catatan_pair? }, ...] }
+ * - Form-data: pairs[]=<json-string> atau field terpisah: hari_izin[], hari_pengganti[]
+ */
+function parsePairsFromBody(body) {
+  if (!body) return [];
+  // 1) Bentuk JSON langsung
+  if (Array.isArray(body.pairs)) {
+    return body.pairs.map((p) => {
+      if (typeof p === 'string') {
+        try {
+          return JSON.parse(p);
+        } catch {
+          return {};
+        }
       }
-    } catch (_) {
-      /* fallback ke NextAuth */
+      return p || {};
+    });
+  }
+  // 2) pairs[] dengan string JSON
+  const arr = body['pairs[]'];
+  if (arr !== undefined) {
+    const list = Array.isArray(arr) ? arr : [arr];
+    return list.map((s) => {
+      try {
+        return JSON.parse(s);
+      } catch {
+        return {};
+      }
+    });
+  }
+  // 3) dua array paralel: hari_izin[], hari_pengganti[]
+  const izinArr = body['hari_izin[]'] ?? body.hari_izin;
+  const gantiArr = body['hari_pengganti[]'] ?? body.hari_pengganti;
+  if (izinArr !== undefined && gantiArr !== undefined) {
+    const ia = Array.isArray(izinArr) ? izinArr : [izinArr];
+    const ga = Array.isArray(gantiArr) ? gantiArr : [gantiArr];
+    const n = Math.max(ia.length, ga.length);
+    const res = [];
+    for (let i = 0; i < n; i++) {
+      res.push({ hari_izin: ia[i], hari_pengganti: ga[i] });
     }
+    return res;
+  }
+  return [];
+}
+
+/** Validasi & normalisasi pairs → array {hari_izin: Date, hari_pengganti: Date, catatan_pair?: string} */
+async function validateAndNormalizePairs(userId, pairsRaw) {
+  if (!Array.isArray(pairsRaw) || pairsRaw.length === 0) {
+    return { ok: false, status: 400, message: 'pairs wajib diisi minimal 1 pasangan hari.' };
   }
 
-  const sessionOrRes = await authenticateRequest();
-  if (sessionOrRes instanceof NextResponse) return sessionOrRes;
+  const normalized = [];
+  const seenIzin = new Set();
+  const seenGanti = new Set();
+  const dateKey = (d) => formatDateISO(d);
 
-  const id = sessionOrRes?.user?.id || sessionOrRes?.user?.id_user;
-  if (!id) {
-    return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
+  for (let i = 0; i < pairsRaw.length; i++) {
+    const p = pairsRaw[i] || {};
+    const izin = parseDateOnlyToUTC(p.hari_izin ?? p.izin ?? p.date_izin);
+    const ganti = parseDateOnlyToUTC(p.hari_pengganti ?? p.pengganti ?? p.date_pengganti);
+    const note = p.catatan_pair === undefined || p.catatan_pair === null ? null : String(p.catatan_pair);
+
+    if (!izin || !ganti) {
+      return { ok: false, status: 400, message: `Pair #${i + 1} tidak valid: 'hari_izin' dan 'hari_pengganti' wajib berupa tanggal valid (YYYY-MM-DD).` };
+    }
+    if (izin.getTime() === ganti.getTime()) {
+      return { ok: false, status: 400, message: `Pair #${i + 1} tidak valid: 'hari_izin' tidak boleh sama dengan 'hari_pengganti'.` };
+    }
+
+    const kI = dateKey(izin);
+    const kG = dateKey(ganti);
+    if (seenIzin.has(kI)) {
+      return { ok: false, status: 400, message: `Tanggal 'hari_izin' ${kI} duplikat dalam pengajuan ini.` };
+    }
+    if (seenGanti.has(kG)) {
+      return { ok: false, status: 400, message: `Tanggal 'hari_pengganti' ${kG} duplikat dalam pengajuan ini.` };
+    }
+    seenIzin.add(kI);
+    seenGanti.add(kG);
+
+    normalized.push({ hari_izin: izin, hari_pengganti: ganti, catatan_pair: note });
   }
 
-  return {
-    actor: {
-      id,
-      role: sessionOrRes?.user?.role,
-      source: 'session',
-      session: sessionOrRes,
+  // Cek tabrakan dengan pengajuan tukar-hari lain milik user (status pending/disetujui)
+  const izinDates = normalized.map((p) => p.hari_izin);
+  const gantiDates = normalized.map((p) => p.hari_pengganti);
+
+  const existingPairs = await db.izinTukarHariPair.findMany({
+    where: {
+      OR: [{ hari_izin: { in: izinDates } }, { hari_pengganti: { in: gantiDates } }],
+      izin_tukar_hari: {
+        id_user: userId,
+        deleted_at: null,
+        status: { in: ['pending', 'disetujui'] }, // ❗ tanpa 'menunggu'
+      },
     },
-  };
-}
-
-function parseTagUserIds(raw) {
-  if (raw === undefined) return undefined;
-  if (raw === null) return [];
-  const arr = Array.isArray(raw) ? raw : [raw];
-  const set = new Set();
-  for (const value of arr) {
-    const str = String(value || '').trim();
-    if (str) set.add(str);
-  }
-  return Array.from(set);
-}
-
-function resolveJenisPengajuan(input, expected) {
-  const fallback = expected;
-  if (input === undefined || input === null) return { ok: true, value: fallback };
-
-  const trimmed = String(input).trim();
-  if (!trimmed) return { ok: true, value: fallback };
-
-  const normalized = trimmed.toLowerCase().replace(/[-\s]+/g, '_');
-  if (normalized !== expected) {
-    return {
-      ok: false,
-      message: `jenis_pengajuan harus bernilai '${expected}'.`,
-    };
-  }
-
-  return { ok: true, value: fallback };
-}
-
-async function validateTaggedUsers(userIds) {
-  if (!userIds || !userIds.length) return;
-  const uniqueIds = Array.from(new Set(userIds));
-  const found = await db.user.findMany({
-    where: { id_user: { in: uniqueIds }, deleted_at: null },
-    select: { id_user: true },
+    select: { hari_izin: true, hari_pengganti: true },
   });
-  if (found.length !== uniqueIds.length) {
-    const missing = uniqueIds.filter((id) => !found.some((u) => u.id_user === id));
-    throw NextResponse.json({ message: `User berikut tidak ditemukan: ${missing.join(', ')}` }, { status: 400 });
+
+  if (existingPairs.length) {
+    const details = existingPairs.map((p) => `(${formatDateISO(p.hari_izin)} ↔ ${formatDateISO(p.hari_pengganti)})`).join(', ');
+    return { ok: false, status: 409, message: `Terdapat pasangan yang sudah diajukan sebelumnya: ${details}.` };
   }
+
+  // Cek bentrok cuti disetujui
+  const cutiBentrok = await db.pengajuanCutiTanggal.findMany({
+    where: {
+      tanggal_cuti: { in: [...izinDates, ...gantiDates] },
+      pengajuan_cuti: {
+        id_user: userId,
+        deleted_at: null,
+        status: 'disetujui',
+      },
+    },
+    select: { tanggal_cuti: true },
+  });
+  if (cutiBentrok.length) {
+    const list = Array.from(new Set(cutiBentrok.map((x) => formatDateISO(x.tanggal_cuti)))).join(', ');
+    return { ok: false, status: 409, message: `Tanggal berikut sudah tercatat sebagai cuti disetujui: ${list}.` };
+  }
+
+  return { ok: true, value: normalized };
 }
 
-function parseDateParam(value) {
-  if (!value) return null;
-  return parseDateOnlyToUTC(value);
-}
-
+/* ============================ GET (List) ============================ */
 export async function GET(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
-
   const actorId = auth.actor?.id;
-  const actorRole = auth.actor?.role;
-  if (!actorId) {
-    return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
-  }
+  if (!actorId) return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
 
   try {
     const { searchParams } = new URL(req.url);
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
-    const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get('pageSize') || '20', 10)));
 
-    const statusRaw = searchParams.get('status');
-    const status = statusRaw ? String(statusRaw).trim().toLowerCase() : undefined;
-    const idUserFilter = searchParams.get('id_user');
-    const q = searchParams.get('q');
-    const hariIzin = searchParams.get('hari_izin');
-    const hariPengganti = searchParams.get('hari_pengganti');
-    const from = searchParams.get('from');
-    const to = searchParams.get('to');
-    const penggantiFrom = searchParams.get('pengganti_from');
-    const penggantiTo = searchParams.get('pengganti_to');
+    const rawPage = parseInt(searchParams.get('page') || '1', 10);
+    const page = Number.isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
+    const perRaw = parseInt(searchParams.get('perPage') || searchParams.get('pageSize') || '20', 10);
+    const perPage = Math.min(Math.max(Number.isNaN(perRaw) ? 20 : perRaw, 1), 100);
 
-    const where = { deleted_at: null };
+    const statusParam = searchParams.get('status');
+    const status = normalizeStatus(statusParam);
+    if (statusParam && !status) {
+      return NextResponse.json({ ok: false, message: 'Parameter status tidak valid.' }, { status: 400 });
+    }
 
-    if (!canManageAll(actorRole)) {
+    const kategori = (searchParams.get('kategori') || '').trim();
+    const targetUser = (searchParams.get('id_user') || '').trim();
+
+    // Filter tanggal pada pair:
+    const hariIzinEq = searchParams.get('hari_izin');
+    const hariIzinFrom = searchParams.get('hari_izin_from');
+    const hariIzinTo = searchParams.get('hari_izin_to');
+    const hariPenggantiEq = searchParams.get('hari_pengganti');
+    const hariPenggantiFrom = searchParams.get('hari_pengganti_from');
+    const hariPenggantiTo = searchParams.get('hari_pengganti_to');
+
+    const where = { deleted_at: null, jenis_pengajuan: 'tukar_hari' };
+
+    // Scope akses
+    if (canManageAll(auth.actor?.role)) {
+      if (targetUser) where.id_user = targetUser;
+    } else {
       where.id_user = actorId;
-    } else if (idUserFilter) {
-      where.id_user = idUserFilter;
     }
 
-    if (status && APPROVE_STATUSES.has(status)) {
-      where.status = status;
+    if (status) {
+      where.status = status; // 'pending' | 'disetujui' | 'ditolak'
+    }
+    if (kategori) where.kategori = kategori;
+
+    // Filter lewat relasi pairs
+    const pairFilter = {};
+    // hari_izin
+    if (hariIzinEq) {
+      const eq = parseDateQuery(hariIzinEq);
+      if (!eq) return NextResponse.json({ ok: false, message: 'Parameter hari_izin tidak valid.' }, { status: 400 });
+      pairFilter.hari_izin = eq;
+    } else if (hariIzinFrom || hariIzinTo) {
+      const gte = parseDateQuery(hariIzinFrom);
+      const lte = parseDateQuery(hariIzinTo);
+      if (hariIzinFrom && !gte) return NextResponse.json({ ok: false, message: 'Parameter hari_izin_from tidak valid.' }, { status: 400 });
+      if (hariIzinTo && !lte) return NextResponse.json({ ok: false, message: 'Parameter hari_izin_to tidak valid.' }, { status: 400 });
+      pairFilter.hari_izin = { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) };
+    }
+    // hari_pengganti
+    if (hariPenggantiEq) {
+      const eq = parseDateQuery(hariPenggantiEq);
+      if (!eq) return NextResponse.json({ ok: false, message: 'Parameter hari_pengganti tidak valid.' }, { status: 400 });
+      pairFilter.hari_pengganti = eq;
+    } else if (hariPenggantiFrom || hariPenggantiTo) {
+      const gte = parseDateQuery(hariPenggantiFrom);
+      const lte = parseDateQuery(hariPenggantiTo);
+      if (hariPenggantiFrom && !gte) return NextResponse.json({ ok: false, message: 'Parameter hari_pengganti_from tidak valid.' }, { status: 400 });
+      if (hariPenggantiTo && !lte) return NextResponse.json({ ok: false, message: 'Parameter hari_pengganti_to tidak valid.' }, { status: 400 });
+      pairFilter.hari_pengganti = { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) };
     }
 
-    const and = [];
-    // Filter by requested swap date(s).  Because swap dates are now stored
-    // in the `pairs` relation rather than as scalar columns, convert
-    // legacy query params into relation filters.  Each filter uses a
-    // `some` clause to match at least one pair within a submission.
-    if (hariIzin) {
-      const parsed = parseDateParam(hariIzin);
-      if (parsed) {
-        and.push({
-          pairs: {
-            some: {
-              hari_izin: { gte: startOfUTCDay(parsed), lte: endOfUTCDay(parsed) },
-            },
-          },
-        });
-      }
-    } else {
-      const parsedFrom = from ? parseDateParam(from) : null;
-      const parsedTo = to ? parseDateParam(to) : null;
-      if (parsedFrom || parsedTo) {
-        and.push({
-          pairs: {
-            some: {
-              hari_izin: {
-                ...(parsedFrom ? { gte: startOfUTCDay(parsedFrom) } : {}),
-                ...(parsedTo ? { lte: endOfUTCDay(parsedTo) } : {}),
-              },
-            },
-          },
-        });
-      }
+    if (Object.keys(pairFilter).length) {
+      where.pairs = { some: pairFilter };
     }
-    // Filter by replacement dates
-    if (hariPengganti) {
-      const parsed = parseDateParam(hariPengganti);
-      if (parsed) {
-        and.push({
-          pairs: {
-            some: {
-              hari_pengganti: { gte: startOfUTCDay(parsed), lte: endOfUTCDay(parsed) },
-            },
-          },
-        });
-      }
-    } else {
-      const parsedFrom = penggantiFrom ? parseDateParam(penggantiFrom) : null;
-      const parsedTo = penggantiTo ? parseDateParam(penggantiTo) : null;
-      if (parsedFrom || parsedTo) {
-        and.push({
-          pairs: {
-            some: {
-              hari_pengganti: {
-                ...(parsedFrom ? { gte: startOfUTCDay(parsedFrom) } : {}),
-                ...(parsedTo ? { lte: endOfUTCDay(parsedTo) } : {}),
-              },
-            },
-          },
-        });
-      }
-    }
-    if (q) {
-      const keyword = String(q).trim();
-      if (keyword) {
-        and.push({
-          OR: [{ kategori: { contains: keyword, mode: 'insensitive' } }, { keperluan: { contains: keyword, mode: 'insensitive' } }, { handover: { contains: keyword, mode: 'insensitive' } }],
-        });
-      }
-    }
-    if (and.length) {
-      where.AND = and;
-    }
-    const [total, rawItems] = await Promise.all([
+
+    const [total, items] = await Promise.all([
       db.izinTukarHari.count({ where }),
       db.izinTukarHari.findMany({
         where,
-        // Order by most recently created submissions.  Ordering by swap
-        // dates via relation fields is not supported by Prisma, so we
-        // perform any date-based ordering in memory after fetching.
         orderBy: [{ created_at: 'desc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        include: baseInclude,
+        skip: (page - 1) * perPage,
+        take: perPage,
+        include: izinInclude,
       }),
     ]);
-    // Transform each record to compute derived scalar fields from the
-    // related pairs.  The earliest pair (sorted by hari_izin) defines
-    // `hari_izin` and `hari_pengganti` for backward compatibility.  A
-    // flattened array of pair objects is exposed via `pairs`.
-    const items = rawItems.map((item) => {
-      const pairs = Array.isArray(item.pairs)
-        ? item.pairs.map((p) => ({
-            hari_izin: p.hari_izin,
-            hari_pengganti: p.hari_pengganti,
-            catatan_pair: p.catatan_pair ?? null,
-          }))
-        : [];
-      // sort by hari_izin ascending
-      pairs.sort((a, b) => {
-        const aTime = a.hari_izin instanceof Date ? a.hari_izin.getTime() : new Date(a.hari_izin).getTime();
-        const bTime = b.hari_izin instanceof Date ? b.hari_izin.getTime() : new Date(b.hari_izin).getTime();
-        return aTime - bTime;
-      });
-      const firstPair = pairs.length ? pairs[0] : null;
-      const derivedHariIzin = firstPair ? firstPair.hari_izin : null;
-      const derivedHariPengganti = firstPair ? firstPair.hari_pengganti : null;
-      const { pairs: _pairs, ...rest } = item;
-      return {
-        ...rest,
-        hari_izin: derivedHariIzin,
-        hari_pengganti: derivedHariPengganti,
-        pairs,
-      };
-    });
+
     return NextResponse.json({
       ok: true,
       data: items,
-      meta: {
-        page,
-        pageSize,
-        total,
-        totalPages: Math.ceil(total / pageSize),
-      },
+      meta: { page, perPage, total, totalPages: Math.ceil(total / perPage) },
     });
   } catch (err) {
-    if (err instanceof NextResponse) return err;
-    console.error('GET /mobile/pengajuan-izin-tukar-hari error:', err);
-    return NextResponse.json({ message: 'Server error.' }, { status: 500 });
+    console.error('GET /mobile/izin-tukar-hari error:', err);
+    return NextResponse.json({ ok: false, message: 'Gagal mengambil data izin tukar hari.' }, { status: 500 });
   }
 }
 
+/* ============================ POST (Create) ============================ */
 export async function POST(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth.actor?.id;
-  const actorRole = auth.actor?.role;
   if (!actorId) {
-    return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
+    return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
   }
 
+  let parsed;
   try {
-    const parsed = await parseRequestBody(req);
-    const body = parsed.body || {};
+    parsed = await parseRequestBody(req);
+  } catch (err) {
+    const status = err?.status || 400;
+    return NextResponse.json({ ok: false, message: err?.message || 'Body request tidak valid.' }, { status });
+  }
+  const body = parsed.body || {};
 
-    /*
-     * Perubahan besar: mendukung pengajuan banyak tanggal
-     * Secara historis, API ini hanya menerima satu hari_izin dan satu hari_pengganti.
-     * Namun untuk memenuhi permintaan agar satu pengajuan bisa memilih lebih dari satu tanggal,
-     * kita cek apakah input merupakan array. Jika array, setiap pasangan akan dibuatkan record terpisah.
-     */
-    const rawHariIzin = body.hari_izin;
-    const rawHariPengganti = body.hari_pengganti;
+  try {
+    const kategori = String(body?.kategori || '').trim();
+    const keperluan = body?.keperluan === undefined || body?.keperluan === null ? null : String(body.keperluan);
+    const handover = body?.handover === undefined || body?.handover === null ? null : String(body.handover);
 
-    // Normalisasi menjadi array
-    const hariIzinArr = Array.isArray(rawHariIzin) ? rawHariIzin : [rawHariIzin];
-    const hariPenggantiArr = Array.isArray(rawHariPengganti) ? rawHariPengganti : [rawHariPengganti];
-
-    // Validasi jumlah array: boleh 1 atau sama panjang
-    if (hariIzinArr.length > 1 && hariPenggantiArr.length > 1 && hariIzinArr.length !== hariPenggantiArr.length) {
-      return NextResponse.json(
-        {
-          message: "Jumlah elemen pada 'hari_izin' dan 'hari_pengganti' tidak sesuai. Panjang array keduanya harus sama atau salah satunya satu.",
-        },
-        { status: 400 }
-      );
+    if (!kategori) {
+      return NextResponse.json({ ok: false, message: 'kategori wajib diisi.' }, { status: 400 });
     }
 
-    // Parse setiap pasangan tanggal
-    const datePairs = [];
-    for (let i = 0; i < hariIzinArr.length; i++) {
-      const hIzinRaw = hariIzinArr[i];
-      const hPenggantiRaw = hariPenggantiArr.length > 1 ? hariPenggantiArr[i] : hariPenggantiArr[0];
-      const hIzin = parseDateOnlyToUTC(hIzinRaw);
-      if (!hIzin) {
-        return NextResponse.json({ message: "Field 'hari_izin' wajib diisi dan harus berupa tanggal yang valid." }, { status: 400 });
+    // jenis_pengajuan harus "tukar_hari"
+    const jenis_pengajuan_input = (body?.jenis_pengajuan ?? 'tukar_hari')
+      .toString()
+      .trim()
+      .toLowerCase()
+      .replace(/[-\s]+/g, '_');
+    if (jenis_pengajuan_input !== 'tukar_hari') {
+      return NextResponse.json({ ok: false, message: "jenis_pengajuan harus bernilai 'tukar_hari'." }, { status: 400 });
+    }
+    const jenis_pengajuan = 'tukar_hari';
+
+    // Handover tags
+    const handoverIdsInput = body?.['handover_tag_user_ids[]'] ?? body?.handover_tag_user_ids;
+    const handoverIds = sanitizeHandoverIds(handoverIdsInput);
+    if (handoverIds && handoverIds.length) {
+      const users = await db.user.findMany({
+        where: { id_user: { in: handoverIds }, deleted_at: null },
+        select: { id_user: true },
+      });
+      const found = new Set(users.map((u) => u.id_user));
+      const missing = handoverIds.filter((id) => !found.has(id));
+      if (missing.length) {
+        return NextResponse.json({ ok: false, message: 'Beberapa handover_tag_user_ids tidak valid.' }, { status: 400 });
       }
-      const hPengganti = parseDateOnlyToUTC(hPenggantiRaw);
-      if (!hPengganti) {
-        return NextResponse.json({ message: "Field 'hari_pengganti' wajib diisi dan harus berupa tanggal yang valid." }, { status: 400 });
-      }
-      datePairs.push({ hariIzin: hIzin, hariPengganti: hPengganti });
     }
 
-    // ===== Lampiran processing =====
-    // Allow clients to attach a file via multipart form-data under various keys or provide a direct URL.
+    // Lampiran (opsional)
     let uploadMeta = null;
     let lampiranUrl = null;
-    try {
-      const lampiranFile = findFileInBody(body, ['lampiran_izin_tukar_hari', 'lampiran', 'lampiran_file', 'file']);
-      if (lampiranFile) {
-        // Upload file to object storage and capture metadata
-        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
+    const lampiranFile = findFileInBody(body, ['lampiran_izin_tukar_hari', 'lampiran', 'lampiran_file', 'file']);
+    if (lampiranFile) {
+      try {
+        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'izin-tukar-hari' });
         lampiranUrl = res.publicUrl || null;
         uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
-      } else if (Object.prototype.hasOwnProperty.call(body, 'lampiran_izin_tukar_hari_url')) {
-        // Fallback: accept a URL or explicit null/empty string to clear existing attachment
-        lampiranUrl = isNullLike(body.lampiran_izin_tukar_hari_url) ? null : String(body.lampiran_izin_tukar_hari_url);
+      } catch (e) {
+        return NextResponse.json({ ok: false, message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
       }
-    } catch (e) {
-      return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
     }
 
-    const kategori = String(body.kategori || '').trim();
-    if (!kategori) {
-      return NextResponse.json({ message: "Field 'kategori' wajib diisi." }, { status: 400 });
+    // Pairs
+    const pairsRaw = parsePairsFromBody(body);
+    const pairsCheck = await validateAndNormalizePairs(actorId, pairsRaw);
+    if (!pairsCheck.ok) {
+      return NextResponse.json({ ok: false, message: pairsCheck.message }, { status: pairsCheck.status || 400 });
     }
+    const pairs = pairsCheck.value;
 
-    const targetUserId = canManageAll(actorRole) && body.id_user ? String(body.id_user).trim() : actorId;
-    if (!targetUserId) {
-      return NextResponse.json({ message: 'id_user tujuan tidak valid.' }, { status: 400 });
-    }
-
-    const keperluan = isNullLike(body.keperluan) ? null : String(body.keperluan).trim();
-    const handover = isNullLike(body.handover) ? null : String(body.handover).trim();
-    const statusRaw = body.status ? String(body.status).trim().toLowerCase() : 'pending';
-    if (statusRaw && !APPROVE_STATUSES.has(statusRaw)) {
-      return NextResponse.json({ message: 'status tidak valid.' }, { status: 400 });
-    }
-
-    const currentLevel = body.current_level !== undefined ? Number(body.current_level) : null;
-    if (currentLevel !== null && !Number.isFinite(currentLevel)) {
-      return NextResponse.json({ message: 'current_level harus berupa angka.' }, { status: 400 });
-    }
-
-    const tagUserIds = parseTagUserIds(body.tag_user_ids);
-    await validateTaggedUsers(tagUserIds);
-
-    const jenisPengajuanResult = resolveJenisPengajuan(body.jenis_pengajuan, 'izin_tukar_hari');
-    if (!jenisPengajuanResult.ok) {
-      return NextResponse.json({ message: jenisPengajuanResult.message }, { status: 400 });
-    }
-    const approvalsInput = extractApprovalsFromBody(body);
-
-    const jenis_pengajuan = jenisPengajuanResult.value;
-    const targetUser = await db.user.findFirst({
-      where: { id_user: targetUserId, deleted_at: null },
-      select: { id_user: true, nama_pengguna: true },
-    });
-    if (!targetUser) {
-      return NextResponse.json({ message: 'User tujuan tidak ditemukan.' }, { status: 404 });
-    }
-
-    // ===== Proses transaksi untuk pengajuan swap hari dengan banyak pasangan =====
-    const resultObj = await db.$transaction(async (tx) => {
-      // Pre-validate approvals jika ada
-      let approvalsValidated = [];
-      if (approvalsInput !== undefined) {
-        approvalsValidated = await validateApprovalEntries(approvalsInput, tx);
+    // Approvals (opsional)
+    // --- PERBAIKAN DI SINI ---
+    // Baca dari body.approvals (untuk JSON) atau body['approvals[]'] (untuk form-data)
+    const rawApprovals = body.approvals ?? body['approvals[]'];
+    let approvals = [];
+    if (rawApprovals !== undefined) {
+      const list = Array.isArray(rawApprovals) ? rawApprovals : [rawApprovals];
+      // --- AKHIR PERBAIKAN ---
+      approvals = list.map((a) => {
+        if (typeof a === 'string') {
+          try {
+            return JSON.parse(a);
+          } catch {
+            return {};
+          }
+        }
+        return a || {};
+      });
+      // validasi user id kalau ada
+      const approverIds = approvals.map((a) => a.approver_user_id).filter(Boolean);
+      if (approverIds.length) {
+        const users = await db.user.findMany({
+          where: { id_user: { in: approverIds }, deleted_at: null },
+          select: { id_user: true },
+        });
+        const okIds = new Set(users.map((u) => u.id_user));
+        const notFound = approverIds.filter((x) => !okIds.has(x));
+        if (notFound.length) {
+          return NextResponse.json({ ok: false, message: 'Beberapa approver_user_id tidak ditemukan.' }, { status: 400 });
+        }
       }
+    }
 
-      // Create the main IzinTukarHari record.  The scalar date fields
-      // (hari_izin, hari_pengganti) have been removed from the model; all
-      // pairs are stored in the related `pairs` relation.  We expand the
-      // collected datePairs into separate pair records using a nested
-      // create.
+    // Transaksi pembuatan
+    const full = await db.$transaction(async (tx) => {
       const created = await tx.izinTukarHari.create({
         data: {
-          id_user: targetUserId,
+          id_user: actorId,
           kategori,
           keperluan,
           handover,
-          status: statusRaw,
-          current_level: currentLevel,
-          jenis_pengajuan,
           lampiran_izin_tukar_hari_url: lampiranUrl,
-          pairs: {
-            create: datePairs.map(({ hariIzin, hariPengganti }) => ({
-              hari_izin: hariIzin,
-              hari_pengganti: hariPengganti,
-            })),
-          },
+          jenis_pengajuan,
+          status: 'pending',
         },
       });
 
-      // Create handover/tagged users if provided
-      if (tagUserIds && tagUserIds.length) {
-        await tx.handoverTukarHari.createMany({
-          data: tagUserIds.map((id) => ({
+      if (pairs.length) {
+        await tx.izinTukarHariPair.createMany({
+          data: pairs.map((p) => ({
             id_izin_tukar_hari: created.id_izin_tukar_hari,
-            id_user_tagged: id,
+            hari_izin: p.hari_izin,
+            hari_pengganti: p.hari_pengganti,
+            catatan_pair: p.catatan_pair || null,
           })),
           skipDuplicates: true,
         });
       }
 
-      // Create approvals if provided
-      if (approvalsInput !== undefined && approvalsValidated.length) {
-        await tx.approvalIzinTukarHari.createMany({
-          data: approvalsValidated.map((item) => ({
+      if (approvals.length) {
+        const rows = approvals
+          .map((a, idx) => ({
             id_izin_tukar_hari: created.id_izin_tukar_hari,
-            level: item.level,
-            approver_user_id: item.approver_user_id,
-            approver_role: item.approver_role,
-            decision: 'pending',
+            level: Number.isFinite(+a.level) ? +a.level : idx + 1,
+            approver_user_id: a.approver_user_id ? String(a.approver_user_id) : null,
+            approver_role: a.approver_role ? String(a.approver_role) : null,
+            decision: 'pending', // ❗ default enum
+          }))
+          .sort((x, y) => x.level - y.level);
+        await tx.approvalIzinTukarHari.createMany({ data: rows, skipDuplicates: true });
+      }
+
+      if (handoverIds && handoverIds.length) {
+        await tx.handoverTukarHari.createMany({
+          data: handoverIds.map((id_user_tagged) => ({
+            id_izin_tukar_hari: created.id_izin_tukar_hari,
+            id_user_tagged,
           })),
+          skipDuplicates: true,
         });
       }
 
-      // Fetch the complete object with includes
       return tx.izinTukarHari.findUnique({
         where: { id_izin_tukar_hari: created.id_izin_tukar_hari },
-        include: baseInclude,
+        include: izinInclude,
       });
     });
 
-    // Kirim notifikasi untuk pengajuan yang telah dibuat
-    if (resultObj) {
-      const deeplink = `/pengajuan-izin-tukar-hari/${resultObj.id_izin_tukar_hari}`;
-      // Determine the earliest swap pair to populate legacy fields in the notification.
-      let firstHariIzin = null;
-      let firstHariPengganti = null;
-      if (Array.isArray(resultObj.pairs) && resultObj.pairs.length) {
-        const sorted = resultObj.pairs
-          .map((p) => ({
-            hari_izin: p.hari_izin,
-            hari_pengganti: p.hari_pengganti,
-          }))
-          .sort((a, b) => {
-            const aT = a.hari_izin instanceof Date ? a.hari_izin.getTime() : new Date(a.hari_izin).getTime();
-            const bT = b.hari_izin instanceof Date ? b.hari_izin.getTime() : new Date(b.hari_izin).getTime();
-            return aT - bT;
-          });
-        const first = sorted[0];
-        firstHariIzin = first?.hari_izin || null;
-        firstHariPengganti = first?.hari_pengganti || null;
-      }
-
-      const basePayload = {
-        nama_pemohon: resultObj.user?.nama_pengguna || 'Rekan',
-        kategori_izin: resultObj.kategori || '-',
-        hari_izin: firstHariIzin instanceof Date ? firstHariIzin.toISOString() : null,
-        hari_pengganti: firstHariPengganti instanceof Date ? firstHariPengganti.toISOString() : null,
-        hari_izin_display: formatDateDisplay(firstHariIzin),
-        hari_pengganti_display: formatDateDisplay(firstHariPengganti),
-        keperluan: resultObj.keperluan || '-',
-        handover: resultObj.handover || '-',
+    // Notifikasi sederhana (pemohon & handover)
+    if (full) {
+      const deeplink = `/izin-tukar-hari/${full.id_izin_tukar_hari}`;
+      const firstPair = (full.pairs || [])[0];
+      const hariIzinDisplay = formatDateDisplay(firstPair?.hari_izin);
+      const bodyBase = {
+        kategori: full.kategori,
+        hari_izin: firstPair?.hari_izin ? formatDateISO(firstPair.hari_izin) : undefined,
+        hari_izin_display: hariIzinDisplay,
         related_table: 'izin_tukar_hari',
-        related_id: resultObj.id_izin_tukar_hari,
+        related_id: full.id_izin_tukar_hari,
         deeplink,
       };
 
-      const notifiedUsers = new Set();
-      const notifPromises = [];
+      const promises = [];
 
-      if (Array.isArray(resultObj.handover_users)) {
-        for (const handoverUser of resultObj.handover_users) {
-          const taggedId = handoverUser?.id_user_tagged;
-          if (!taggedId || notifiedUsers.has(taggedId)) continue;
-          notifiedUsers.add(taggedId);
+      // notif ke pemohon
+      promises.push(
+        sendNotification(
+          'SWAP_CREATE_SUCCESS',
+          full.id_user,
+          {
+            ...bodyBase,
+            title: 'Pengajuan izin tukar hari terkirim',
+            body: `Pengajuan tukar hari kategori ${full.kategori} telah dibuat (mulai ${hariIzinDisplay}).`,
+            overrideTitle: 'Pengajuan izin tukar hari terkirim',
+            overrideBody: `Pengajuan tukar hari kategori ${full.kategori} telah dibuat (mulai ${hariIzinDisplay}).`,
+          },
+          { deeplink }
+        )
+      );
 
-          const overrideTitle = `${basePayload.nama_pemohon} mengajukan izin tukar hari`;
-          const overrideBody = `${basePayload.nama_pemohon} menandai Anda sebagai handover untuk izin tukar hari ${basePayload.kategori_izin} pada ${basePayload.hari_izin_display} diganti ${basePayload.hari_pengganti_display}.`;
-
-          notifPromises.push(
+      // notif ke handover tags
+      if (Array.isArray(full.handover_users)) {
+        const sent = new Set();
+        for (const h of full.handover_users) {
+          const uid = h?.id_user_tagged;
+          if (!uid || sent.has(uid)) continue;
+          sent.add(uid);
+          promises.push(
             sendNotification(
-              'IZIN_TUKAR_HARI_HANDOVER_TAGGED',
-              taggedId,
+              'SWAP_HANDOVER_TAGGED',
+              uid,
               {
-                ...basePayload,
-                nama_penerima: handoverUser?.user?.nama_pengguna || undefined,
-                title: overrideTitle,
-                body: overrideBody,
-                overrideTitle,
-                overrideBody,
+                ...bodyBase,
+                nama_penerima: h?.user?.nama_pengguna || undefined,
+                title: `${full.user?.nama_pengguna || 'Rekan'} mengajukan tukar hari`,
+                body: `${full.user?.nama_pengguna || 'Rekan'} menandai Anda untuk pengajuan tukar hari pada ${hariIzinDisplay}.`,
+                overrideTitle: `${full.user?.nama_pengguna || 'Rekan'} mengajukan tukar hari`,
+                overrideBody: `${full.user?.nama_pengguna || 'Rekan'} menandai Anda pada ${hariIzinDisplay}.`,
               },
               { deeplink }
             )
@@ -598,72 +566,17 @@ export async function POST(req) {
         }
       }
 
-      if (resultObj.id_user && !notifiedUsers.has(resultObj.id_user)) {
-        const overrideTitle = 'Pengajuan izin tukar hari berhasil dikirim';
-        const overrideBody = `Pengajuan izin tukar hari ${basePayload.kategori_izin} pada ${basePayload.hari_izin_display} diganti ${basePayload.hari_pengganti_display} telah berhasil dibuat.`;
-
-        notifPromises.push(
-          sendNotification(
-            'IZIN_TUKAR_HARI_HANDOVER_TAGGED',
-            resultObj.id_user,
-            {
-              ...basePayload,
-              is_pemohon: true,
-              title: overrideTitle,
-              body: overrideBody,
-              overrideTitle,
-              overrideBody,
-            },
-            { deeplink }
-          )
-        );
-        notifiedUsers.add(resultObj.id_user);
-      }
-
-      if (canManageAll(actorRole) && actorId && !notifiedUsers.has(actorId)) {
-        const overrideTitle = 'Pengajuan izin tukar hari berhasil dibuat';
-        const overrideBody = `Pengajuan izin tukar hari untuk ${basePayload.nama_pemohon} pada ${basePayload.hari_izin_display} diganti ${basePayload.hari_pengganti_display} telah disimpan.`;
-
-        notifPromises.push(
-          sendNotification(
-            'IZIN_TUKAR_HARI_HANDOVER_TAGGED',
-            actorId,
-            {
-              ...basePayload,
-              is_admin: true,
-              title: overrideTitle,
-              body: overrideBody,
-              overrideTitle,
-              overrideBody,
-            },
-            { deeplink }
-          )
-        );
-        notifiedUsers.add(actorId);
-      }
-
-      if (notifPromises.length) {
-        await Promise.allSettled(notifPromises);
-      }
+      await Promise.allSettled(promises);
     }
 
-    return NextResponse.json(
-      {
-        message: 'Pengajuan izin tukar hari berhasil dibuat.',
-        data: resultObj,
-        // Include upload metadata if a file was uploaded
-        upload: uploadMeta || undefined,
-      },
-      { status: 201 }
-    );
+    return NextResponse.json({
+      ok: true,
+      message: 'Pengajuan izin tukar hari berhasil dibuat.',
+      data: full,
+      upload: uploadMeta || undefined,
+    });
   } catch (err) {
-    if (err instanceof NextResponse) return err;
-    if (err?.code === 'P2003') {
-      return NextResponse.json({ message: 'Data referensi tidak valid.' }, { status: 400 });
-    }
-    console.error('POST /mobile/pengajuan-izin-tukar-hari error:', err);
-    return NextResponse.json({ message: 'Server error.' }, { status: 500 });
+    console.error('POST /mobile/izin-tukar-hari error:', err);
+    return NextResponse.json({ ok: false, message: 'Gagal membuat pengajuan izin tukar hari.' }, { status: 500 });
   }
 }
-
-export { ensureAuth, baseInclude, parseTagUserIds };

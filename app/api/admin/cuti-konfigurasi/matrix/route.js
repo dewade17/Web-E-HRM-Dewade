@@ -1,13 +1,14 @@
-// app/api/admin/cuti-konfigurasi/route.js
+// app/api/admin/cuti-konfigurasi/matrix/route.js
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 
-const ALLOWED_MONTHS = new Set(['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER']);
+const MONTHS = ['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'];
+const ALLOWED_MONTHS = new Set(MONTHS);
 
+/* ========= AUTH HELPERS ========= */
 async function ensureAuth(req) {
-  /* sama seperti versi kamu */
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
     try {
@@ -19,6 +20,7 @@ async function ensureAuth(req) {
   if (sessionOrRes instanceof NextResponse) return sessionOrRes;
   return { actor: { id: sessionOrRes.user.id, role: sessionOrRes.user.role, source: 'session' } };
 }
+
 function guardHr(actor) {
   const role = String(actor?.role || '')
     .trim()
@@ -29,8 +31,7 @@ function guardHr(actor) {
   return null;
 }
 
-const ALLOWED_ORDER_BY = new Set(['created_at', 'updated_at', 'bulan', 'kouta_cuti', 'user']);
-
+/* ========= GET MATRIX ========= */
 export async function GET(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -39,65 +40,89 @@ export async function GET(req) {
 
   try {
     const { searchParams } = new URL(req.url);
+    const q = (searchParams.get('q') || '').trim();
+    const deptId = (searchParams.get('deptId') || '').trim();
+    const jabatanId = (searchParams.get('jabatanId') || '').trim();
+
     const page = Math.max(parseInt(searchParams.get('page') || '1', 10), 1);
-    const pageSize = Math.min(Math.max(parseInt(searchParams.get('pageSize') || '10', 10), 1), 100);
-    const includeDeleted = ['1', 'true'].includes((searchParams.get('includeDeleted') || '').toLowerCase());
-    const search = (searchParams.get('search') || '').trim();
-    const userId = (searchParams.get('userId') || '').trim();
-    const bulanParam = (searchParams.get('bulan') || '').trim().toUpperCase();
-    const bulanFilter = ALLOWED_MONTHS.has(bulanParam) ? bulanParam : null;
+    const pageSize = Math.min(Math.max(parseInt(searchParams.get('pageSize') || '50', 10), 1), 200);
 
-    const orderByParam = (searchParams.get('orderBy') || 'created_at').trim();
-    const orderBy = ALLOWED_ORDER_BY.has(orderByParam) ? orderByParam : 'created_at';
-    const sort = (searchParams.get('sort') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
-
-    const where = {
-      ...(includeDeleted ? {} : { deleted_at: null }),
-      ...(userId ? { id_user: userId } : {}),
-      ...(bulanFilter ? { bulan: bulanFilter } : {}),
-      ...(search ? { OR: [{ user: { nama_pengguna: { contains: search } } }, { user: { email: { contains: search } } }, { user: { nomor_induk_karyawan: { contains: search } } }] } : {}),
+    // filter user aktif
+    const userWhere = {
+      status_kerja: 'AKTIF',
+      deleted_at: null,
+      ...(deptId ? { id_departement: deptId } : {}),
+      ...(jabatanId ? { id_jabatan: jabatanId } : {}),
+      ...(q
+        ? {
+            OR: [{ nama_pengguna: { contains: q } }, { email: { contains: q } }],
+          }
+        : {}),
     };
 
-    const orderClause = orderBy === 'user' ? { user: { nama_pengguna: sort } } : { [orderBy]: sort };
+    const total = await db.user.count({ where: userWhere });
+    const users = await db.user.findMany({
+      where: userWhere,
+      orderBy: { nama_pengguna: 'asc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id_user: true,
+        nama_pengguna: true,
+        email: true,
+        foto_profil_user: true,
+        id_departement: true,
+        id_jabatan: true,
+        departement: { select: { nama_departement: true } },
+        jabatan: { select: { nama_jabatan: true } },
+      },
+    });
 
-    const [total, data] = await Promise.all([
-      db.cutiKonfigurasi.count({ where }),
-      db.cutiKonfigurasi.findMany({
-        where,
-        orderBy: orderClause,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        select: {
-          id_cuti_konfigurasi: true,
-          id_user: true,
-          bulan: true,
-          kouta_cuti: true,
-          created_at: true,
-          updated_at: true,
-          deleted_at: true,
-          user: {
-            select: {
-              id_user: true,
-              nama_pengguna: true,
-              email: true,
-              nomor_induk_karyawan: true,
-              role: true,
-            },
-          },
-        },
-      }),
-    ]);
+    const ids = users.map((u) => u.id_user);
+    const configs = ids.length
+      ? await db.cutiKonfigurasi.findMany({
+          where: { id_user: { in: ids }, deleted_at: null },
+          select: { id_cuti_konfigurasi: true, id_user: true, bulan: true, kouta_cuti: true },
+        })
+      : [];
+
+    // map id_user -> { bulan -> kouta }
+    const byUser = new Map();
+    for (const u of users) {
+      const quotas = {};
+      for (const m of MONTHS) quotas[m] = 0; // default 0
+      byUser.set(u.id_user, {
+        id: u.id_user,
+        name: u.nama_pengguna,
+        email: u.email,
+        jabatan: u.jabatan?.nama_jabatan || null,
+        departemen: u.departement?.nama_departement || null,
+        foto_profil_user: u.foto_profil_user || null,
+        quotas,
+      });
+    }
+
+    for (const c of configs) {
+      const row = byUser.get(c.id_user);
+      if (!row) continue;
+      const mk = String(c.bulan || '').toUpperCase();
+      if (ALLOWED_MONTHS.has(mk)) row.quotas[mk] = c.kouta_cuti ?? 0;
+    }
+
+    const data = Array.from(byUser.values());
 
     return NextResponse.json({
       data,
+      months: MONTHS, // agar FE pakai urutan yang sama
       pagination: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) },
     });
   } catch (err) {
-    console.error('GET /admin/cuti-konfigurasi error:', err);
+    console.error('GET /admin/cuti-konfigurasi/matrix error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
 
+/* ========= BULK SAVE ========= */
 export async function POST(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -106,30 +131,52 @@ export async function POST(req) {
 
   try {
     const body = await req.json();
-    const idUser = body?.id_user ? String(body.id_user).trim() : '';
-    const bulanInput = body?.bulan ? String(body.bulan).trim().toUpperCase() : '';
-    const koutaRaw = body?.kouta_cuti;
+    const items = Array.isArray(body?.items) ? body.items : [];
 
-    if (!idUser) return NextResponse.json({ message: "Field 'id_user' wajib diisi." }, { status: 400 });
-    if (!bulanInput || !ALLOWED_MONTHS.has(bulanInput)) return NextResponse.json({ message: "Field 'bulan' tidak valid." }, { status: 400 });
+    if (!items.length) {
+      return NextResponse.json({ message: 'items[] kosong.' }, { status: 400 });
+    }
 
-    const kouta = Number(koutaRaw);
-    if (!Number.isInteger(kouta) || kouta < 0) return NextResponse.json({ message: "Field 'kouta_cuti' harus berupa bilangan bulat >= 0." }, { status: 400 });
+    // validasi ringan
+    for (const [i, it] of items.entries()) {
+      const id_user = String(it?.id_user || '').trim();
+      const bulan = String(it?.bulan || '')
+        .trim()
+        .toUpperCase();
+      const kouta = Number(it?.kouta_cuti);
+      if (!id_user) return NextResponse.json({ message: `items[${i}].id_user wajib.` }, { status: 400 });
+      if (!ALLOWED_MONTHS.has(bulan)) return NextResponse.json({ message: `items[${i}].bulan tidak valid.` }, { status: 400 });
+      if (!Number.isInteger(kouta) || kouta < 0) return NextResponse.json({ message: `items[${i}].kouta_cuti harus bilangan bulat >= 0.` }, { status: 400 });
+    }
 
-    const user = await db.user.findUnique({ where: { id_user: idUser }, select: { id_user: true } });
-    if (!user) return NextResponse.json({ message: 'User tidak ditemukan.' }, { status: 404 });
+    // transaksi upsert manual agar tidak bergantung pada unique composite schema
+    await db.$transaction(async (tx) => {
+      for (const it of items) {
+        const id_user = String(it.id_user).trim();
+        const bulan = String(it.bulan).trim().toUpperCase();
+        const kouta = Number(it.kouta_cuti);
 
-    const created = await db.cutiKonfigurasi.create({
-      data: { id_user: idUser, bulan: bulanInput, kouta_cuti: kouta },
-      select: { id_cuti_konfigurasi: true, id_user: true, bulan: true, kouta_cuti: true, created_at: true },
+        const existing = await tx.cutiKonfigurasi.findFirst({
+          where: { id_user, bulan },
+          select: { id_cuti_konfigurasi: true },
+        });
+
+        if (existing) {
+          await tx.cutiKonfigurasi.update({
+            where: { id_cuti_konfigurasi: existing.id_cuti_konfigurasi },
+            data: { kouta_cuti: kouta, deleted_at: null },
+          });
+        } else {
+          await tx.cutiKonfigurasi.create({
+            data: { id_user, bulan, kouta_cuti: kouta },
+          });
+        }
+      }
     });
 
-    return NextResponse.json({ message: 'Konfigurasi cuti dibuat.', data: created }, { status: 201 });
+    return NextResponse.json({ message: 'Tersimpan.' });
   } catch (err) {
-    if (err?.code === 'P2002') {
-      return NextResponse.json({ message: 'Konfigurasi cuti untuk user dan bulan tersebut sudah ada.' }, { status: 409 });
-    }
-    console.error('POST /admin/cuti-konfigurasi error:', err);
+    console.error('POST /admin/cuti-konfigurasi/matrix error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
