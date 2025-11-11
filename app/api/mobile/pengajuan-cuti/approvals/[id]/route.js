@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
-import { ensureAuth, pengajuanInclude } from '../../route';
+import { ensureAuth, pengajuanInclude, summarizeDatesByMonth } from '../../route';
 import { sendNotification } from '@/app/utils/services/notificationService';
 
 const DECISION_ALLOWED = new Set(['disetujui', 'ditolak']);
@@ -309,6 +309,7 @@ async function handleDecision(req, { params }) {
             select: {
               id_pengajuan_cuti: true,
               id_user: true,
+              id_kategori_cuti: true,
               status: true,
               tanggal_masuk_kerja: true,
               current_level: true,
@@ -377,19 +378,108 @@ async function handleDecision(req, { params }) {
       const { anyApproved, allRejected, highestApprovedLevel } = summarizeApprovalStatus(approvals);
       const parentUpdate = {};
 
+      const pengajuanData = approvalRecord.pengajuan_cuti;
+      const previousStatus = pengajuanData?.status || null;
+      const tanggalPengajuan = Array.isArray(pengajuanData?.tanggal_list) ? pengajuanData.tanggal_list.map((item) => item?.tanggal_cuti) : [];
+      const quotaAdjustments = summarizeDatesByMonth(tanggalPengajuan);
+
       if (anyApproved) {
-        parentUpdate.status = 'disetujui';
         parentUpdate.current_level = highestApprovedLevel;
+        if (previousStatus !== 'disetujui') parentUpdate.status = 'disetujui';
       } else if (allRejected) {
-        parentUpdate.status = 'ditolak';
         parentUpdate.current_level = null;
+        if (previousStatus !== 'ditolak') parentUpdate.status = 'ditolak';
       }
+
+      const willApprove = parentUpdate.status === 'disetujui' && previousStatus !== 'disetujui';
+      const willReject = parentUpdate.status === 'ditolak' && previousStatus === 'disetujui';
+      let categoryRecord = null;
 
       let submission;
       let shiftSyncResult = createDefaultShiftSyncResult();
 
       // Update status pengajuan utama jika perlu
       if (Object.keys(parentUpdate).length) {
+        if (willApprove || willReject) {
+          categoryRecord = await tx.kategoriCuti.findFirst({
+            where: { id_kategori_cuti: pengajuanData.id_kategori_cuti, deleted_at: null },
+            select: { id_kategori_cuti: true, pengurangan_kouta: true },
+          });
+          if (!categoryRecord) {
+            throw NextResponse.json({ ok: false, message: 'Kategori cuti tidak ditemukan.' }, { status: 404 });
+          }
+        }
+
+        if (willApprove && categoryRecord?.pengurangan_kouta && quotaAdjustments.length) {
+          const months = quotaAdjustments.map(([bulan]) => bulan).filter(Boolean);
+          if (months.length) {
+            const configs = await tx.cutiKonfigurasi.findMany({
+              where: { id_user: pengajuanData.id_user, bulan: { in: months }, deleted_at: null },
+              select: { id_cuti_konfigurasi: true, bulan: true, kouta_cuti: true },
+            });
+            const configMap = new Map(configs.map((cfg) => [cfg.bulan, cfg]));
+            const insufficientMonths = [];
+
+            for (const [bulan, count] of quotaAdjustments) {
+              if (!bulan || !Number.isFinite(count) || count <= 0) continue;
+              const config = configMap.get(bulan);
+              if (!config || config.kouta_cuti < count) {
+                insufficientMonths.push(bulan);
+              }
+            }
+
+            if (insufficientMonths.length) {
+              throw NextResponse.json(
+                {
+                  ok: false,
+                  message: insufficientMonths.length === 1 ? `Kuota cuti tidak mencukupi untuk bulan ${insufficientMonths[0]}.` : `Kuota cuti tidak mencukupi untuk bulan ${insufficientMonths.join(', ')}.`,
+                },
+                { status: 409 }
+              );
+            }
+
+            for (const [bulan, count] of quotaAdjustments) {
+              if (!bulan || !Number.isFinite(count) || count <= 0) continue;
+              const config = configMap.get(bulan);
+              if (!config) continue;
+              const newQuota = config.kouta_cuti - count;
+              await tx.cutiKonfigurasi.update({
+                where: { id_cuti_konfigurasi: config.id_cuti_konfigurasi },
+                data: { kouta_cuti: newQuota < 0 ? 0 : newQuota },
+              });
+            }
+          }
+        }
+
+        if (willReject && categoryRecord?.pengurangan_kouta && quotaAdjustments.length) {
+          const months = quotaAdjustments.map(([bulan]) => bulan).filter(Boolean);
+          if (months.length) {
+            const configs = await tx.cutiKonfigurasi.findMany({
+              where: { id_user: pengajuanData.id_user, bulan: { in: months } },
+              select: { id_cuti_konfigurasi: true, bulan: true, kouta_cuti: true, deleted_at: true },
+            });
+            const configMap = new Map(configs.map((cfg) => [cfg.bulan, cfg]));
+
+            for (const [bulan, count] of quotaAdjustments) {
+              if (!bulan || !Number.isFinite(count) || count <= 0) continue;
+              const existing = configMap.get(bulan);
+              if (existing) {
+                await tx.cutiKonfigurasi.update({
+                  where: { id_cuti_konfigurasi: existing.id_cuti_konfigurasi },
+                  data: { kouta_cuti: existing.kouta_cuti + count, deleted_at: null },
+                });
+              } else {
+                await tx.cutiKonfigurasi.create({
+                  data: {
+                    id_user: pengajuanData.id_user,
+                    bulan,
+                    kouta_cuti: count,
+                  },
+                });
+              }
+            }
+          }
+        }
         submission = await tx.pengajuanCuti.update({
           where: { id_pengajuan_cuti: approvalRecord.id_pengajuan_cuti },
           data: parentUpdate,
