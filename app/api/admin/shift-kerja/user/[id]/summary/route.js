@@ -22,13 +22,10 @@ async function ensureAuth(req) {
 function parseDateParam(value, field) {
   if (value === null) {
     const today = new Date();
-    const utc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-    return utc;
+    return new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
   }
   const trimmed = value.trim();
-  if (!trimmed) {
-    throw new Error(`Parameter '${field}' tidak boleh kosong.`);
-  }
+  if (!trimmed) throw new Error(`Parameter '${field}' tidak boleh kosong.`);
   const parsed = parseDateOnlyToUTC(trimmed);
   if (!(parsed instanceof Date) || Number.isNaN(parsed.getTime())) {
     throw new Error(`Parameter '${field}' harus berupa tanggal yang valid (YYYY-MM-DD).`);
@@ -39,28 +36,24 @@ function parseDateParam(value, field) {
 function buildDateFilter(searchParams, field) {
   const from = searchParams.get(`${field}From`);
   const to = searchParams.get(`${field}To`);
-  const filter = {};
+  const range = {};
   if (from) {
-    const parsed = parseDateOnlyToUTC(from);
-    if (!(parsed instanceof Date)) {
-      throw new Error(`Parameter '${field}From' tidak valid.`);
-    }
-    filter.gte = parsed;
+    const d = parseDateOnlyToUTC(from);
+    if (!(d instanceof Date) || isNaN(+d)) throw new Error(`Parameter '${field}From' tidak valid.`);
+    range.gte = d;
   }
   if (to) {
-    const parsed = parseDateOnlyToUTC(to);
-    if (!(parsed instanceof Date)) {
-      throw new Error(`Parameter '${field}To' tidak valid.`);
-    }
-    filter.lte = parsed;
+    const d = parseDateOnlyToUTC(to);
+    if (!(d instanceof Date) || isNaN(+d)) throw new Error(`Parameter '${field}To' tidak valid.`);
+    range.lte = d;
   }
-  return Object.keys(filter).length > 0 ? filter : undefined;
+  return Object.keys(range).length ? range : undefined;
 }
 
 function clampLimit(raw) {
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed)) return 50;
-  return Math.min(Math.max(parsed, 1), 200);
+  const n = Number.parseInt(raw, 10);
+  if (Number.isNaN(n)) return 50;
+  return Math.min(Math.max(n, 1), 200);
 }
 
 export async function GET(req) {
@@ -76,19 +69,15 @@ export async function GET(req) {
     };
 
     const idUser = (searchParams.get('id_user') || '').trim();
-    if (idUser) {
-      baseWhere.id_user = idUser;
-    }
+    if (idUser) baseWhere.id_user = idUser;
 
     const idPolaKerjaRaw = searchParams.get('id_pola_kerja');
     if (idPolaKerjaRaw !== null) {
       const trimmed = idPolaKerjaRaw.trim();
-      if (trimmed === 'null') {
-        baseWhere.id_pola_kerja = null;
-      } else if (trimmed) {
-        baseWhere.id_pola_kerja = trimmed;
-      }
+      if (trimmed === 'null') baseWhere.id_pola_kerja = null;
+      else if (trimmed) baseWhere.id_pola_kerja = trimmed;
     }
+
     const status = (searchParams.get('status') || '').trim();
     let statusFilter = 'KERJA';
     if (status) {
@@ -100,14 +89,10 @@ export async function GET(req) {
     }
 
     const tanggalMulaiFilter = buildDateFilter(searchParams, 'tanggalMulai');
-    if (tanggalMulaiFilter) {
-      baseWhere.tanggal_mulai = tanggalMulaiFilter;
-    }
+    if (tanggalMulaiFilter) baseWhere.tanggal_mulai = tanggalMulaiFilter;
 
     const tanggalSelesaiFilter = buildDateFilter(searchParams, 'tanggalSelesai');
-    if (tanggalSelesaiFilter) {
-      baseWhere.tanggal_selesai = tanggalSelesaiFilter;
-    }
+    if (tanggalSelesaiFilter) baseWhere.tanggal_selesai = tanggalSelesaiFilter;
 
     const dateParam = searchParams.get('date');
     let targetDate;
@@ -120,18 +105,16 @@ export async function GET(req) {
     const limit = clampLimit(searchParams.get('limit') || '50');
     const sortDirection = (searchParams.get('sort') || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc';
 
-    const overlapConditions = [{ OR: [{ tanggal_mulai: null }, { tanggal_mulai: { lte: targetDate } }] }, { OR: [{ tanggal_selesai: null }, { tanggal_selesai: { gte: targetDate } }] }];
-
-    const existingAnd = Array.isArray(baseWhere.AND) ? [...baseWhere.AND] : [];
+    // OVERLAP MURNI: mulai ≤ targetDate DAN selesai ≥ targetDate
     const datasetWhere = {
       ...baseWhere,
       status: statusFilter,
-      AND: [...existingAnd, ...overlapConditions],
+      AND: [{ tanggal_mulai: { lte: targetDate } }, { tanggal_selesai: { gte: targetDate } }],
     };
 
     const data = await db.shiftKerja.findMany({
       where: datasetWhere,
-      orderBy: [{ tanggal_mulai: sortDirection }, { updated_at: 'desc' }],
+      orderBy: [{ tanggal_mulai: sortDirection }, { updated_at: 'desc' }, { id_shift_kerja: 'asc' }],
       take: limit,
       select: {
         id_shift_kerja: true,
@@ -144,13 +127,7 @@ export async function GET(req) {
         created_at: true,
         updated_at: true,
         deleted_at: true,
-        user: {
-          select: {
-            id_user: true,
-            nama_pengguna: true,
-            email: true,
-          },
-        },
+        user: { select: { id_user: true, nama_pengguna: true, email: true } },
         polaKerja: {
           select: {
             id_pola_kerja: true,
@@ -166,22 +143,15 @@ export async function GET(req) {
     });
 
     const total = data.length;
+    const statusCounts = SHIFT_STATUS.reduce((acc, k) => ((acc[k] = 0), acc), {});
+    for (const row of data) statusCounts[row.status] = (statusCounts[row.status] || 0) + 1;
 
-    const statusCounts = SHIFT_STATUS.reduce((acc, key) => ({ ...acc, [key]: 0 }), {});
-
-    for (const item of data) {
-      statusCounts[item.status] = (statusCounts[item.status] || 0) + 1;
-    }
     const activeDate = targetDate.toISOString().slice(0, 10);
-
     return NextResponse.json({
       summary: {
         total,
         status: statusCounts,
-        activeOn: {
-          date: activeDate,
-          total,
-        },
+        activeOn: { date: activeDate, total },
       },
       date: activeDate,
       total,

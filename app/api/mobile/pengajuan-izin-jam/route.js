@@ -12,7 +12,22 @@ const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']); // selara
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 const baseInclude = {
-  user: { select: { id_user: true, nama_pengguna: true, email: true, role: true } },
+  user: {
+    select: {
+      id_user: true,
+      nama_pengguna: true,
+      email: true,
+      role: true,
+      foto_profil_user: true,
+      divisi: true,
+      jabatan: {
+        select: {
+          id_jabatan: true,
+          nama_jabatan: true,
+        },
+      },
+    },
+  },
   kategori: { select: { id_kategori_izin_jam: true, nama_kategori: true } },
   handover_users: {
     include: { user: { select: { id_user: true, nama_pengguna: true, email: true, role: true, foto_profil_user: true } } },

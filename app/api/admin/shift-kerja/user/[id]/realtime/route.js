@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
-import { parseDateOnlyToUTC } from '@/helpers/date-helper'; 
+import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
@@ -23,9 +23,7 @@ function parseDateParam(value, field) {
     return new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
   }
   const trimmed = value.trim();
-  if (!trimmed) {
-    throw new Error(`Parameter '${field}' tidak boleh kosong.`);
-  }
+  if (!trimmed) throw new Error(`Parameter '${field}' tidak boleh kosong.`);
   const parsed = parseDateOnlyToUTC(trimmed);
   if (!(parsed instanceof Date) || Number.isNaN(parsed.getTime())) {
     throw new Error(`Parameter '${field}' harus berupa tanggal yang valid (YYYY-MM-DD).`);
@@ -34,9 +32,9 @@ function parseDateParam(value, field) {
 }
 
 function clampLimit(raw) {
-  const parsed = Number.parseInt(raw, 10);
-  if (Number.isNaN(parsed)) return 50;
-  return Math.min(Math.max(parsed, 1), 200);
+  const n = Number.parseInt(raw, 10);
+  if (Number.isNaN(n)) return 50;
+  return Math.min(Math.max(n, 1), 200);
 }
 
 export async function GET(req) {
@@ -47,24 +45,19 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const includeDeleted = searchParams.get('includeDeleted') === '1';
 
-    const where = {
+    const whereBase = {
       ...(includeDeleted ? {} : { deleted_at: null }),
       status: 'KERJA',
     };
 
     const idUser = (searchParams.get('id_user') || '').trim();
-    if (idUser) {
-      where.id_user = idUser;
-    }
+    if (idUser) whereBase.id_user = idUser;
 
     const idPolaKerjaRaw = searchParams.get('id_pola_kerja');
     if (idPolaKerjaRaw !== null) {
       const trimmed = idPolaKerjaRaw.trim();
-      if (trimmed === 'null') {
-        where.id_pola_kerja = null;
-      } else if (trimmed) {
-        where.id_pola_kerja = trimmed;
-      }
+      if (trimmed === 'null') whereBase.id_pola_kerja = null;
+      else if (trimmed) whereBase.id_pola_kerja = trimmed;
     }
 
     const dateParam = searchParams.get('date');
@@ -78,14 +71,15 @@ export async function GET(req) {
     const limit = clampLimit(searchParams.get('limit') || '50');
     const sortDirection = (searchParams.get('sort') || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc';
 
-    const realtimeWhere = {
-      ...where,
-      AND: [{ OR: [{ tanggal_mulai: null }, { tanggal_mulai: { lte: targetDate } }] }, { OR: [{ tanggal_selesai: null }, { tanggal_selesai: { gte: targetDate } }] }],
+    // OVERLAP MURNI (tanpa cabang null)
+    const where = {
+      ...whereBase,
+      AND: [{ tanggal_mulai: { lte: targetDate } }, { tanggal_selesai: { gte: targetDate } }],
     };
 
     const data = await db.shiftKerja.findMany({
-      where: realtimeWhere,
-      orderBy: [{ tanggal_mulai: sortDirection }, { updated_at: 'desc' }],
+      where,
+      orderBy: [{ tanggal_mulai: sortDirection }, { updated_at: 'desc' }, { id_shift_kerja: 'asc' }],
       take: limit,
       select: {
         id_shift_kerja: true,
@@ -98,13 +92,7 @@ export async function GET(req) {
         created_at: true,
         updated_at: true,
         deleted_at: true,
-        user: {
-          select: {
-            id_user: true,
-            nama_pengguna: true,
-            email: true,
-          },
-        },
+        user: { select: { id_user: true, nama_pengguna: true, email: true } },
         polaKerja: {
           select: {
             id_pola_kerja: true,

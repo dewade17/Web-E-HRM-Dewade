@@ -11,7 +11,22 @@ const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']); // selara
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 const baseInclude = {
-  user: { select: { id_user: true, nama_pengguna: true, email: true, role: true } },
+  user: {
+    select: {
+      id_user: true,
+      nama_pengguna: true,
+      email: true,
+      role: true,
+      foto_profil_user: true,
+      divisi: true,
+      jabatan: {
+        select: {
+          id_jabatan: true,
+          nama_jabatan: true,
+        },
+      },
+    },
+  },
   kategori: { select: { id_kategori_sakit: true, nama_kategori: true } },
   handover_users: {
     include: { user: { select: { id_user: true, nama_pengguna: true, email: true, role: true, foto_profil_user: true } } },
@@ -65,16 +80,6 @@ function normalizeStatusInput(value) {
   const s = String(value).trim().toLowerCase();
   const mapped = s === 'menunggu' ? 'pending' : s;
   return APPROVE_STATUSES.has(mapped) ? mapped : null;
-}
-
-function resolveJenisPengajuan(input, expected) {
-  const fallback = expected;
-  if (input === undefined || input === null) return { ok: true, value: fallback };
-  const trimmed = String(input).trim();
-  if (!trimmed) return { ok: true, value: fallback };
-  const normalized = trimmed.toLowerCase().replace(/[-\s]+/g, '_');
-  if (normalized !== expected) return { ok: false, message: `jenis_pengajuan harus bernilai '${expected}'.` };
-  return { ok: true, value: fallback };
 }
 
 async function ensureAuth(req) {
@@ -287,9 +292,7 @@ export async function POST(req) {
       return NextResponse.json({ message: 'current_level harus berupa angka.' }, { status: 400 });
     }
 
-    const jenisPengajuanResult = resolveJenisPengajuan(body.jenis_pengajuan, 'izin_sakit');
-    if (!jenisPengajuanResult.ok) return NextResponse.json({ message: jenisPengajuanResult.message }, { status: 400 });
-    const jenis_pengajuan = jenisPengajuanResult.value;
+    const jenis_pengajuan = 'sakit';
 
     const tagUserIds = parseTagUserIds(body.tag_user_ids ?? body.handover_user_ids);
     await validateTaggedUsers(tagUserIds);

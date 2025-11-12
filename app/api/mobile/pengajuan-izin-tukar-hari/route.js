@@ -74,7 +74,22 @@ export async function ensureAuth(req) {
 }
 
 export const izinInclude = {
-  user: { select: { id_user: true, nama_pengguna: true, email: true, role: true } },
+  user: {
+    select: {
+      id_user: true,
+      nama_pengguna: true,
+      email: true,
+      role: true,
+      foto_profil_user: true,
+      divisi: true,
+      jabatan: {
+        select: {
+          id_jabatan: true,
+          nama_jabatan: true,
+        },
+      },
+    },
+  },
   handover_users: {
     include: {
       user: { select: { id_user: true, nama_pengguna: true, email: true, role: true, foto_profil_user: true } },
@@ -373,16 +388,7 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, message: 'kategori wajib diisi.' }, { status: 400 });
     }
 
-    // jenis_pengajuan harus "tukar_hari"
-    const jenis_pengajuan_input = (body?.jenis_pengajuan ?? 'tukar_hari')
-      .toString()
-      .trim()
-      .toLowerCase()
-      .replace(/[-\s]+/g, '_');
-    if (jenis_pengajuan_input !== 'tukar_hari') {
-      return NextResponse.json({ ok: false, message: "jenis_pengajuan harus bernilai 'tukar_hari'." }, { status: 400 });
-    }
-    const jenis_pengajuan = 'tukar_hari';
+    const jenis_pengajuan = 'hari';
 
     // Handover tags
     const handoverIdsInput = body?.['handover_tag_user_ids[]'] ?? body?.handover_tag_user_ids;
