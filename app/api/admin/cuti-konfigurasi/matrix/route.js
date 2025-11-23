@@ -22,10 +22,8 @@ async function ensureAuth(req) {
 }
 
 function guardHr(actor) {
-  const role = String(actor?.role || '')
-    .trim()
-    .toUpperCase();
-  if (!['HR', 'OPERASIONAL', 'SUPERADMIN'].includes(role)) {
+  const role = String(actor?.role || '').trim().toUpperCase();
+  if (!['HR','OPERASIONAL','SUPERADMIN'].includes(role)) {
     return NextResponse.json({ message: 'Forbidden: hanya HR/OPERASIONAL/SUPERADMIN yang dapat mengakses resource ini.' }, { status: 403 });
   }
   return null;

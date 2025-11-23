@@ -4,6 +4,9 @@ import { ensureAuth } from '../../route';
 import { sendNotification } from '@/app/utils/services/notificationService';
 
 const DECISION_ALLOWED = new Set(['disetujui', 'ditolak']);
+const PENDING_DECISIONS = new Set(['pending']);
+
+const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
   day: '2-digit',
@@ -16,17 +19,24 @@ function normalizeDecision(val) {
   const s = String(val).trim().toLowerCase();
   return DECISION_ALLOWED.has(s) ? s : null;
 }
+
 function normalizeRole(role) {
   return String(role || '')
     .trim()
     .toUpperCase();
 }
+
+function canManageAll(role) {
+  return ADMIN_ROLES.has(normalizeRole(role));
+}
+
 function toDateOnly(value) {
   if (!value) return null;
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return null;
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
+
 function formatDateISO(value) {
   if (!value) return '-';
   try {
@@ -35,6 +45,7 @@ function formatDateISO(value) {
     return '-';
   }
 }
+
 function formatDateDisplay(value) {
   const d = toDateOnly(value);
   if (!d) return '-';
@@ -45,7 +56,22 @@ function formatDateDisplay(value) {
   }
 }
 
-// ---------- ▼▼▼ PERBAIKAN DI SINI (FUNGSI SYNC SHIFT) ▼▼▼ ----------
+/* -------------------- SHIFT SYNC HELPERS -------------------- */
+
+const DEFAULT_SHIFT_SYNC_RESULT = Object.freeze({
+  updatedCount: 0,
+  createdCount: 0,
+  affectedDates: [],
+  returnShift: null,
+});
+
+function createDefaultShiftSyncResult() {
+  return {
+    ...DEFAULT_SHIFT_SYNC_RESULT,
+    affectedDates: [],
+    returnShift: null,
+  };
+}
 
 /**
  * Sinkronisasi shift menggunakan UPSERT untuk mengatasi konflik soft-delete.
@@ -54,7 +80,7 @@ function formatDateDisplay(value) {
  */
 async function syncShiftForSwapPairs(tx, { userId, pairs, idPolaKerjaPengganti = null }) {
   if (!tx || !userId || !Array.isArray(pairs) || pairs.length === 0) {
-    return { updatedCount: 0, createdCount: 0, affectedDates: [], returnShift: null };
+    return createDefaultShiftSyncResult();
   }
 
   const upsertActions = [];
@@ -66,7 +92,9 @@ async function syncShiftForSwapPairs(tx, { userId, pairs, idPolaKerjaPengganti =
 
     // 1. Set Hari Izin menjadi LIBUR
     if (hariIzin) {
-      affectedDates.add(hariIzin.toISOString().slice(0, 10));
+      const key = hariIzin.toISOString().slice(0, 10);
+      affectedDates.add(key);
+
       upsertActions.push(
         tx.shiftKerja.upsert({
           where: {
@@ -85,11 +113,11 @@ async function syncShiftForSwapPairs(tx, { userId, pairs, idPolaKerjaPengganti =
             deleted_at: null,
           },
           update: {
-            tanggal_selesai: hariIzin, // Pastikan konsisten jika menimpa rentang
+            tanggal_selesai: hariIzin,
             hari_kerja: 'LIBUR',
             status: 'LIBUR',
             id_pola_kerja: null,
-            deleted_at: null, // <-- PENTING: Menghidupkan (uns-soft-delete)
+            deleted_at: null, // un-soft-delete jika perlu
           },
         })
       );
@@ -97,7 +125,9 @@ async function syncShiftForSwapPairs(tx, { userId, pairs, idPolaKerjaPengganti =
 
     // 2. Set Hari Pengganti menjadi KERJA
     if (hariPengganti) {
-      affectedDates.add(hariPengganti.toISOString().slice(0, 10));
+      const key = hariPengganti.toISOString().slice(0, 10);
+      affectedDates.add(key);
+
       upsertActions.push(
         tx.shiftKerja.upsert({
           where: {
@@ -119,8 +149,8 @@ async function syncShiftForSwapPairs(tx, { userId, pairs, idPolaKerjaPengganti =
             tanggal_selesai: hariPengganti,
             hari_kerja: 'KERJA',
             status: 'KERJA',
-            id_pola_kerja: idPolaKerjaPengganti ?? null, // Gunakan pola override jika ada
-            deleted_at: null, // <-- PENTING: Menghidupkan (uns-soft-delete)
+            id_pola_kerja: idPolaKerjaPengganti ?? null,
+            deleted_at: null, // un-soft-delete juga
           },
         })
       );
@@ -131,14 +161,25 @@ async function syncShiftForSwapPairs(tx, { userId, pairs, idPolaKerjaPengganti =
   const totalOperations = results.length;
 
   return {
-    updatedCount: totalOperations, // Sederhanakan pelaporan
-    createdCount: 0,
-    affectedDates: Array.from(affectedDates).map((k) => new Date(k + 'T00:00:00Z')),
-    returnShift: null, // Tidak relevan untuk tukar hari
+    updatedCount: totalOperations,
+    createdCount: 0, // susah dibedakan dari upsert tanpa query extra
+    affectedDates: Array.from(affectedDates).map((k) => new Date(`${k}T00:00:00Z`)),
+    returnShift: null, // tidak relevan untuk tukar hari
   };
 }
 
-// ---------- ▲▲▲ AKHIR PERBAIKAN ▲▲▲ ----------
+/* -------------------- APPROVAL SUMMARY (sama dengan cuti) -------------------- */
+
+function summarizeApprovalStatus(approvals) {
+  const approved = approvals.filter((item) => item.decision === 'disetujui');
+  const anyApproved = approved.length > 0;
+  const allRejected = approvals.length > 0 && approvals.every((item) => item.decision === 'ditolak');
+  const highestApprovedLevel = anyApproved ? approved.reduce((acc, curr) => (curr.level > acc ? curr.level : acc), approved[0].level) : null;
+
+  return { anyApproved, allRejected, highestApprovedLevel };
+}
+
+/* -------------------- HANDLER PATCH/PUT -------------------- */
 
 /**
  * PATCH/PUT approval: /api/mobile/izin-tukar-hari/approvals/[id]
@@ -148,8 +189,10 @@ async function handleDecision(req, { params }) {
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth?.actor?.id;
-  const actorRole = normalizeRole(auth?.actor?.role);
-  if (!actorId) return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
+  const actorRole = auth?.actor?.role;
+  if (!actorId) {
+    return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
+  }
 
   const id = params?.id;
   if (!id) return NextResponse.json({ ok: false, message: 'id wajib diisi.' }, { status: 400 });
@@ -158,13 +201,20 @@ async function handleDecision(req, { params }) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ ok: false, message: 'Body request harus berupa JSON.' }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, message: 'Body request harus berupa JSON.' },
+      { status: 400 }
+    );
   }
 
   const decision = normalizeDecision(body?.decision);
   if (!decision) {
-    return NextResponse.json({ ok: false, message: 'decision harus diisi dengan nilai disetujui atau ditolak.' }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, message: 'decision harus diisi dengan nilai disetujui atau ditolak.' },
+      { status: 400 }
+    );
   }
+
   const note = body?.note === undefined || body?.note === null ? null : String(body.note);
   const idPolaKerjaPengganti = body?.id_pola_kerja_pengganti ? String(body.id_pola_kerja_pengganti) : null;
 
@@ -181,33 +231,51 @@ async function handleDecision(req, { params }) {
               current_level: true,
               deleted_at: true,
               kategori: true,
-              pairs: { select: { hari_izin: true, hari_pengganti: true }, orderBy: { hari_izin: 'asc' } },
+              pairs: {
+                select: { hari_izin: true, hari_pengganti: true, catatan_pair: true },
+                orderBy: { hari_izin: 'asc' },
+              },
             },
           },
         },
       });
 
       if (!approval || approval.deleted_at) {
-        throw NextResponse.json({ ok: false, message: 'Approval tidak ditemukan.' }, { status: 404 });
-      }
-      const parent = approval.izin_tukar_hari;
-      if (!parent || parent.deleted_at) {
-        throw NextResponse.json({ ok: false, message: 'Pengajuan tidak ditemukan.' }, { status: 404 });
+        throw NextResponse.json(
+          { ok: false, message: 'Approval tidak ditemukan.' },
+          { status: 404 }
+        );
       }
 
+      const parent = approval.izin_tukar_hari;
+      if (!parent || parent.deleted_at) {
+        throw NextResponse.json(
+          { ok: false, message: 'Pengajuan tidak ditemukan.' },
+          { status: 404 }
+        );
+      }
+
+      const normalizedActorRole = normalizeRole(actorRole);
       const matchesUser = approval.approver_user_id && approval.approver_user_id === actorId;
-      const matchesRole = approval.approver_role && normalizeRole(approval.approver_role) === actorRole;
-      if (!matchesUser && !matchesRole) {
+      const matchesRole = approval.approver_role && normalizeRole(approval.approver_role) === normalizedActorRole;
+      const isAdmin = canManageAll(actorRole);
+
+      // DI SINI SUMBER 403 SEBELUMNYA
+      if (!isAdmin && !matchesUser && !matchesRole) {
         throw NextResponse.json({ ok: false, message: 'Anda tidak memiliki akses untuk approval ini.' }, { status: 403 });
       }
 
-      if (approval.decision !== 'pending') {
+      if (!PENDING_DECISIONS.has(approval.decision)) {
         throw NextResponse.json({ ok: false, message: 'Approval sudah memiliki keputusan.' }, { status: 409 });
       }
 
       const updatedApproval = await tx.approvalIzinTukarHari.update({
         where: { id_approval_izin_tukar_hari: id },
-        data: { decision, note, decided_at: new Date() },
+        data: {
+          decision,
+          note,
+          decided_at: new Date(),
+        },
         select: {
           id_approval_izin_tukar_hari: true,
           id_izin_tukar_hari: true,
@@ -218,16 +286,14 @@ async function handleDecision(req, { params }) {
         },
       });
 
-      // Kumpulkan status semua level
+      // Kumpulkan status semua level & rangkum (sama seperti cuti)
       const approvals = await tx.approvalIzinTukarHari.findMany({
         where: { id_izin_tukar_hari: parent.id_izin_tukar_hari, deleted_at: null },
         orderBy: { level: 'asc' },
         select: { level: true, decision: true },
       });
 
-      const anyApproved = approvals.some((a) => a.decision === 'disetujui');
-      const allRejected = approvals.length > 0 && approvals.every((a) => a.decision === 'ditolak');
-      const highestApprovedLevel = anyApproved ? approvals.filter((a) => a.decision === 'disetujui').reduce((acc, c) => Math.max(acc, c.level), 0) : null;
+      const { anyApproved, allRejected, highestApprovedLevel } = summarizeApprovalStatus(approvals);
 
       const parentUpdate = {};
       if (anyApproved) {
@@ -239,31 +305,34 @@ async function handleDecision(req, { params }) {
       }
 
       let submission;
-      let shiftSync = { updatedCount: 0, createdCount: 0, affectedDates: [], returnShift: null };
+      let shiftSync = createDefaultShiftSyncResult();
 
       if (Object.keys(parentUpdate).length) {
         submission = await tx.izinTukarHari.update({
           where: { id_izin_tukar_hari: parent.id_izin_tukar_hari },
           data: parentUpdate,
           include: {
-            // Re-fetch pairs, karena relasi submission di atas tidak mengambilnya
-            pairs: { select: { hari_izin: true, hari_pengganti: true }, orderBy: { hari_izin: 'asc' } },
-            user: { select: { id_user: true } }, // Pastikan id_user ada untuk sync
+            pairs: {
+              select: { hari_izin: true, hari_pengganti: true, catatan_pair: true },
+              orderBy: { hari_izin: 'asc' },
+            },
           },
         });
 
         if (parentUpdate.status === 'disetujui') {
           try {
             shiftSync = await syncShiftForSwapPairs(tx, {
-              userId: submission.id_user,
-              pairs: submission.pairs, // Gunakan pairs yang di-fetch
+              userId: submission.id_user, // pastikan model punya field id_user
+              pairs: submission.pairs,
               idPolaKerjaPengganti,
             });
           } catch (e) {
             console.error('Gagal sinkron shift tukar-hari:', e);
-            // Lempar error agar transaksi di-rollback
             if (e instanceof NextResponse) throw e;
-            throw NextResponse.json({ ok: false, message: 'Gagal menyelaraskan shift untuk tukar hari.' }, { status: 500 });
+            throw NextResponse.json(
+              { ok: false, message: 'Gagal menyelaraskan shift untuk tukar hari.' },
+              { status: 500 }
+            );
           }
         }
       } else {
@@ -271,7 +340,6 @@ async function handleDecision(req, { params }) {
           where: { id_izin_tukar_hari: parent.id_izin_tukar_hari },
           include: {
             pairs: true,
-            user: { select: { id_user: true } }, // Include user
           },
         });
       }
@@ -305,7 +373,11 @@ async function handleDecision(req, { params }) {
     }
 
     // Notifikasi sinkronisasi shift
-    if (approval.decision === 'disetujui' && submission?.id_user && (shiftSync.updatedCount > 0 || shiftSync.createdCount > 0)) {
+    if (
+      approval.decision === 'disetujui' &&
+      submission?.id_user &&
+      (shiftSync.updatedCount > 0 || shiftSync.createdCount > 0)
+    ) {
       const ds = (shiftSync.affectedDates || [])
         .map(toDateOnly)
         .filter(Boolean)
@@ -313,8 +385,8 @@ async function handleDecision(req, { params }) {
 
       let periodeDisplay = 'tanggal terkait tukar hari';
       if (ds.length) {
-        const first = ds[0],
-          last = ds[ds.length - 1] || first;
+        const first = ds[0];
+        const last = ds[ds.length - 1] || first;
         const a = formatDateDisplay(first);
         const b = formatDateDisplay(last);
         periodeDisplay = a === b ? `tanggal ${a}` : `periode ${a} - ${b}`;
@@ -351,13 +423,17 @@ async function handleDecision(req, { params }) {
   } catch (err) {
     if (err instanceof NextResponse) return err;
     console.error('PATCH/PUT /mobile/izin-tukar-hari/approvals error:', err);
-    return NextResponse.json({ ok: false, message: 'Terjadi kesalahan saat memproses approval.' }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, message: 'Terjadi kesalahan saat memproses approval.' },
+      { status: 500 }
+    );
   }
 }
 
 export async function PATCH(req, ctx) {
   return handleDecision(req, ctx || {});
 }
+
 export async function PUT(req, ctx) {
   return handleDecision(req, ctx || {});
 }

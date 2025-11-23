@@ -12,7 +12,7 @@ export async function GET(req) {
   const forbidden = guardHr(auth.actor);
   if (forbidden) return forbidden;
 
-  try {
+  try{
     const { searchParams } = new URL(req.url);
     const page = Math.max(parseInt(searchParams.get('page') || '1', 10), 1);
     const pageSize = Math.min(Math.max(parseInt(searchParams.get('pageSize') || '10', 10), 1), 100);
@@ -22,9 +22,9 @@ export async function GET(req) {
     const bulanParam = (searchParams.get('bulan') || '').trim().toUpperCase();
     const bulanFilter = ALLOWED_MONTHS.has(bulanParam) ? bulanParam : null;
 
-    const orderByParam = (searchParams.get('orderBy') || 'created_at').trim();
+    const orderByParam = (searchParams.get('orderBy')||'created_at').trim();
     const orderBy = ALLOWED_ORDER_BY.has(orderByParam) ? orderByParam : 'created_at';
-    const sort = (searchParams.get('sort') || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+    const sort = (searchParams.get('sort')||'desc').toLowerCase()==='asc' ? 'asc':'desc';
 
     const where = {
       ...(includeDeleted ? {} : { deleted_at: null }),
@@ -67,9 +67,9 @@ export async function GET(req) {
       data,
       pagination: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) },
     });
-  } catch (err) {
+  }catch(err){
     console.error('GET /admin/cuti-konfigurasi error:', err);
-    return NextResponse.json({ message: 'Server error.' }, { status: 500 });
+    return NextResponse.json({message:'Server error.'},{status:500});
   }
 }
 
@@ -79,7 +79,7 @@ export async function POST(req) {
   const forbidden = guardHr(auth.actor);
   if (forbidden) return forbidden;
 
-  try {
+  try{
     const body = await req.json();
     const idUser = body?.id_user ? String(body.id_user).trim() : '';
     const bulanInput = body?.bulan ? String(body.bulan).trim().toUpperCase() : '';
@@ -99,12 +99,12 @@ export async function POST(req) {
       select: { id_cuti_konfigurasi: true, id_user: true, bulan: true, kouta_cuti: true, created_at: true },
     });
 
-    return NextResponse.json({ message: 'Konfigurasi cuti dibuat.', data: created }, { status: 201 });
-  } catch (err) {
+    return NextResponse.json({message:'Konfigurasi cuti dibuat.', data: created},{status:201});
+  }catch(err){
     if (err?.code === 'P2002') {
       return NextResponse.json({ message: 'Konfigurasi cuti untuk user dan bulan tersebut sudah ada.' }, { status: 409 });
     }
     console.error('POST /admin/cuti-konfigurasi error:', err);
-    return NextResponse.json({ message: 'Server error.' }, { status: 500 });
+    return NextResponse.json({message:'Server error.'},{status:500});
   }
 }

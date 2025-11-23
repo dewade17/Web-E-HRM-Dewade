@@ -5,7 +5,14 @@ import db from '../../../../../lib/prisma';
 import { verifyAuthToken } from '../../../../../lib/jwt';
 import { authenticateRequest } from '../../../../../app/utils/auth/authUtils';
 import { createClient } from '@supabase/supabase-js';
-import { JENIS_KELAMIN_VALUES, STATUS_KERJA_VALUES, normalizeNullableEnum, normalizeNullableInt, normalizeNullableString, normalizeOptionalDate } from '../../../_utils/user-field-normalizer';
+import {
+  JENIS_KELAMIN_VALUES,
+  STATUS_KERJA_VALUES,
+  normalizeNullableEnum,
+  normalizeNullableInt,
+  normalizeNullableString,
+  normalizeOptionalDate
+} from '../../../_utils/user-field-normalizer';
 
 const normRole = (r) =>
   String(r || '')

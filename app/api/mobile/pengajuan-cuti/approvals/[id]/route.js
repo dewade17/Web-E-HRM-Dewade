@@ -36,9 +36,7 @@ function normalizeDecision(value) {
 }
 
 function normalizeRole(role) {
-  return String(role || '')
-    .trim()
-    .toUpperCase();
+  return String(role || '').trim().toUpperCase();
 }
 
 /**
@@ -88,7 +86,9 @@ function summarizeApprovalStatus(approvals) {
   const approved = approvals.filter((item) => item.decision === 'disetujui');
   const anyApproved = approved.length > 0;
   const allRejected = approvals.length > 0 && approvals.every((item) => item.decision === 'ditolak');
-  const highestApprovedLevel = anyApproved ? approved.reduce((acc, curr) => (curr.level > acc ? curr.level : acc), approved[0].level) : null;
+  const highestApprovedLevel = anyApproved
+    ? approved.reduce((acc, curr) => (curr.level > acc ? curr.level : acc), approved[0].level)
+    : null;
 
   return { anyApproved, allRejected, highestApprovedLevel };
 }

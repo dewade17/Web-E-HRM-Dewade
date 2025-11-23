@@ -36,7 +36,43 @@ function isNullLike(v) {
   return false;
 }
 
-/** ⬇️ include YANG VALID sesuai schema */
+/** Parser waktu robust:
+ * - Jika ISO dgn offset/Z → new Date(s)
+ * - Jika naif "YYYY-MM-DD HH:mm:ss" → dibekukan sebagai UTC (Date.UTC(...))
+ */
+function parseFlexibleDateTime(input) {
+  if (!input) return null;
+  const s = String(input).trim();
+  if (/[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(s)) {
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (m) {
+    const [, y, M, d, H = '00', i = '00', sec = '00'] = m;
+    return new Date(
+      Date.UTC(Number(y), Number(M) - 1, Number(d), Number(H), Number(i), Number(sec))
+    );
+  }
+  const d2 = new Date(s);
+  return Number.isNaN(d2.getTime()) ? null : d2;
+}
+
+/** Date-only "YYYY-MM-DD" → UTC midnight */
+function parseDateOnlyToUTC(input) {
+  if (!input) return null;
+  const s = String(input).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const [, y, M, d] = m;
+    return new Date(Date.UTC(Number(y), Number(M) - 1, Number(d)));
+  }
+  const d2 = new Date(s);
+  if (Number.isNaN(d2.getTime())) return null;
+  return new Date(Date.UTC(d2.getUTCFullYear(), d2.getUTCMonth(), d2.getUTCDate()));
+}
+
+/** include relasi valid */
 const kunjunganInclude = {
   kategori: { select: { id_kategori_kunjungan: true, kategori_kunjungan: true } },
   user: {
@@ -49,7 +85,6 @@ const kunjunganInclude = {
       divisi: true,
       id_departement: true,
       id_jabatan: true,
-      // nama relasi di schema: Departement (tabel), field relasi di User: 'departement'
       departement: { select: { id_departement: true, nama_departement: true } },
       jabatan:     { select: { id_jabatan: true,     nama_jabatan: true     } },
     },
@@ -80,7 +115,7 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const page = Math.max(parseInt(searchParams.get('page') || '1', 10), 1);
     const rawPageSize = parseInt(searchParams.get('pageSize') || searchParams.get('perPage') || '10', 10);
-    const pageSize = Math.min(Math.max(Number.isNaN(rawPageSize) ? 10 : rawPageSize, 1), 50);
+    const pageSize = Math.min(Math.max(Number.isNaN(rawPageSize) ? 10 : rawPageSize, 1), 1000);
 
     const q = (searchParams.get('q') || searchParams.get('search') || '').trim();
     const kategoriId = (searchParams.get('id_kategori_kunjungan') || '').trim();
@@ -91,28 +126,24 @@ export async function GET(req) {
 
     const filters = [{ deleted_at: null }];
 
-    // role filter
     if (!canSeeAll(auth.actor?.role)) {
       filters.push({ id_user: auth.actor.id });
     }
-
     if (userId) filters.push({ id_user: userId });
     if (kategoriId) filters.push({ id_kategori_kunjungan: kategoriId });
     if (status) filters.push({ status_kunjungan: status });
 
-    // rentang tanggal (kolom 'tanggal' bertipe Date-only di schema)
     if (tanggalMulai || tanggalSelesai) {
       const range = {};
       if (tanggalMulai) {
-        const d = new Date(tanggalMulai);
-        if (!Number.isNaN(d.getTime())) range.gte = d;
+        const d = parseFlexibleDateTime(tanggalMulai) || parseDateOnlyToUTC(tanggalMulai);
+        if (d) range.gte = d;
       }
       if (tanggalSelesai) {
-        const d = new Date(tanggalSelesai);
-        if (!Number.isNaN(d.getTime())) {
-          // eksklusif < esok harinya
+        const d = parseFlexibleDateTime(tanggalSelesai) || parseDateOnlyToUTC(tanggalSelesai);
+        if (d) {
           const end = new Date(d);
-          end.setDate(end.getDate() + 1);
+          end.setUTCDate(end.getUTCDate() + 1); // eksklusif esok
           range.lt = end;
         }
       }
@@ -160,7 +191,6 @@ export async function POST(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
 
-  // hanya OP/SUPERADMIN boleh assign ke orang lain, tapi untuk ringkasnya skip validasi lanjutan di sini
   try {
     const body = await req.json();
     const {
@@ -180,13 +210,11 @@ export async function POST(req) {
       return NextResponse.json({ message: "Field 'tanggal' wajib diisi." }, { status: 400 });
     }
 
-    const tgl = new Date(String(tanggal)); // date-only
-    if (Number.isNaN(tgl.getTime())) {
-      return NextResponse.json({ message: "Field 'tanggal' tidak valid." }, { status: 400 });
-    }
+    const tgl = parseDateOnlyToUTC(String(tanggal));
+    if (!tgl) return NextResponse.json({ message: "Field 'tanggal' tidak valid." }, { status: 400 });
 
-    const jm = isNullLike(jam_mulai) ? null : new Date(String(jam_mulai));
-    const js = isNullLike(jam_selesai) ? null : new Date(String(jam_selesai));
+    const jm = isNullLike(jam_mulai) ? null : parseFlexibleDateTime(String(jam_mulai));
+    const js = isNullLike(jam_selesai) ? null : parseFlexibleDateTime(String(jam_selesai));
     if (jm && Number.isNaN(jm.getTime())) return NextResponse.json({ message: "Field 'jam_mulai' tidak valid." }, { status: 400 });
     if (js && Number.isNaN(js.getTime())) return NextResponse.json({ message: "Field 'jam_selesai' tidak valid." }, { status: 400 });
 

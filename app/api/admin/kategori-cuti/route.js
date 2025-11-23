@@ -96,6 +96,7 @@ export async function GET(req) {
         select: {
           id_kategori_cuti: true,
           nama_kategori: true,
+          pengurangan_kouta: true,
           created_at: true,
           updated_at: true,
           deleted_at: true,

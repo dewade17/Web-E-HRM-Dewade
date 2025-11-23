@@ -11,7 +11,8 @@ import { readApprovalsFromBody } from './_utils/approvals';
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']); // selaras Prisma
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
-const baseInclude = {
+// [PERBAIKAN] Tambahkan 'export' agar bisa di-impor file lain
+export const baseInclude = {
   user: {
     select: {
       id_user: true,
@@ -19,7 +20,13 @@ const baseInclude = {
       email: true,
       role: true,
       foto_profil_user: true,
-      divisi: true,
+      id_departement: true,
+      departement: {
+        select: {
+          id_departement: true,
+          nama_departement: true,
+        },
+      },
       jabatan: {
         select: {
           id_jabatan: true,
@@ -106,7 +113,8 @@ function normalizeStatusInput(value) {
   return APPROVE_STATUSES.has(mapped) ? mapped : null;
 }
 
-async function ensureAuth(req) {
+// [PERBAIKAN] Tambahkan 'export'
+export async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
     try {
@@ -125,7 +133,8 @@ async function ensureAuth(req) {
   return { actor: { id, role: sessionOrRes?.user?.role, source: 'session', session: sessionOrRes } };
 }
 
-function parseTagUserIds(raw) {
+// [PERBAIKAN] Tambahkan 'export'
+export function parseTagUserIds(raw) {
   if (raw === undefined) return undefined;
   if (raw === null) return [];
   const arr = Array.isArray(raw) ? raw : [raw];
@@ -137,7 +146,8 @@ function parseTagUserIds(raw) {
   return Array.from(set);
 }
 
-async function validateTaggedUsers(userIds) {
+// [PERBAIKAN] Tambahkan 'export'
+export async function validateTaggedUsers(userIds) {
   if (!userIds || !userIds.length) return;
   const uniqueIds = Array.from(new Set(userIds));
   const found = await db.user.findMany({
@@ -340,7 +350,8 @@ export async function POST(req) {
       return NextResponse.json({ message: 'current_level harus berupa angka.' }, { status: 400 });
     }
 
-    const tagUserIds = parseTagUserIds(body.tag_user_ids);
+    // [PERBAIKAN] Gunakan fallback key
+    const tagUserIds = parseTagUserIds(body.tag_user_ids ?? body.handover_user_ids);
     await validateTaggedUsers(tagUserIds);
 
     const jenis_pengajuan = 'jam';
@@ -466,5 +477,3 @@ export async function POST(req) {
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }
 }
-
-export { ensureAuth, baseInclude, parseTagUserIds };

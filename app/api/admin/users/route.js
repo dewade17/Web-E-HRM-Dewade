@@ -54,7 +54,11 @@ export async function GET(req) {
       ...(namaPengguna ? { nama_pengguna: { contains: namaPengguna } } : {}),
       ...(search
         ? {
-            OR: [{ nama_pengguna: { contains: search } }, { email: { contains: search } }, { kontak: { contains: search } }],
+            OR: [
+              { nama_pengguna: { contains: search } },
+              { email: { contains: search } },
+              { kontak: { contains: search } },
+            ],
           }
         : {}),
     };

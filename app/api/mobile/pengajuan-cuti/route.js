@@ -26,7 +26,13 @@ export const pengajuanInclude = {
       email: true,
       role: true,
       foto_profil_user: true,
-      divisi: true,
+      id_departement: true,
+      departement: {
+        select: {
+          id_departement: true,
+          nama_departement: true,
+        },
+      },
       jabatan: {
         select: {
           id_jabatan: true,
@@ -82,10 +88,7 @@ const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
   year: 'numeric',
 });
 
-const normRole = (role) =>
-  String(role || '')
-    .trim()
-    .toUpperCase();
+const normRole = (role) => String(role || '').trim().toUpperCase();
 const canManageAll = (role) => ADMIN_ROLES.has(normRole(role));
 
 function formatDateISO(value) {
@@ -206,7 +209,10 @@ export async function GET(req) {
 
     const rawPage = parseInt(searchParams.get('page') || '1', 10);
     const page = Number.isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
-    const perPageRaw = parseInt(searchParams.get('perPage') || searchParams.get('pageSize') || '20', 10);
+    const perPageRaw = parseInt(
+      searchParams.get('perPage') || searchParams.get('pageSize') || '20',
+      10
+    );
     const perPageBase = Number.isNaN(perPageRaw) || perPageRaw < 1 ? 20 : perPageRaw;
     const perPage = Math.min(Math.max(perPageBase, 1), 100);
 
@@ -411,17 +417,18 @@ export async function POST(req) {
 
     const kategori = await db.kategoriCuti.findFirst({
       where: { id_kategori_cuti, deleted_at: null },
-      select: { id_kategori_cuti: true },
+      select: { id_kategori_cuti: true, pengurangan_kouta: true }, // ← [FIX]
     });
+
     if (!kategori) {
       return NextResponse.json({ ok: false, message: 'Kategori cuti tidak ditemukan.' }, { status: 404 });
     }
 
     if (handoverIds && handoverIds.length) {
-      const users = await db.user.findMany({
-        where: { id_user: { in: handoverIds }, deleted_at: null },
-        select: { id_kategori_cuti: true, pengurangan_kouta: true },
-      });
+    const users = await db.user.findMany({
+      where: { id_user: { in: handoverIds }, deleted_at: null },
+      select: { id_user: true }, // ← [FIX]
+    });
 
       const foundIds = new Set(users.map((u) => u.id_user));
       const missing = handoverIds.filter((id) => !foundIds.has(id));

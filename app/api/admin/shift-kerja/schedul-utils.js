@@ -182,7 +182,13 @@ export function normalizeWeeklySchedule(rawInput, options = {}) {
     throw new Error("Field 'hari_kerja' harus berupa objek jadwal mingguan yang valid.");
   }
 
-  const typeRaw = scheduleInput.type ?? scheduleInput.pattern ?? scheduleInput.mode ?? scheduleInput.patternType ?? scheduleInput.jenis ?? 'WEEKLY';
+  const typeRaw =
+    scheduleInput.type ??
+    scheduleInput.pattern ??
+    scheduleInput.mode ??
+    scheduleInput.patternType ??
+    scheduleInput.jenis ??
+    'WEEKLY';
   const type = String(typeRaw).trim().toUpperCase();
   if (type !== 'WEEKLY') {
     throw new Error("Saat ini hanya tipe jadwal mingguan ('WEEKLY') yang didukung.");
@@ -307,14 +313,23 @@ export function transformShiftRecord(record) {
 /** Ambil bentuk jadwal mingguan dari body (fleksibel: weekly_schedule / hari_kerja / days / dst.) */
 export function extractWeeklyScheduleInput(body) {
   if (!body || typeof body !== 'object') return undefined;
-  const candidates = [body.weekly_schedule, body.weeklySchedule, body.jadwal_mingguan, body.jadwalMingguan];
+  const candidates = [
+    body.weekly_schedule,
+    body.weeklySchedule,
+    body.jadwal_mingguan,
+    body.jadwalMingguan,
+  ];
   for (const candidate of candidates) {
     if (candidate !== undefined && candidate !== null) {
       return candidate;
     }
   }
   const direct = body.hari_kerja ?? body.hariKerja ?? body.weekdays ?? body.days;
-  if (direct !== undefined && direct !== null && (Array.isArray(direct) || isPlainObject(direct))) {
+  if (
+    direct !== undefined &&
+    direct !== null &&
+    (Array.isArray(direct) || isPlainObject(direct))
+  ) {
     return direct;
   }
   return undefined;

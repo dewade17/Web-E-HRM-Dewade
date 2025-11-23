@@ -3,7 +3,13 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
-import { extractWeeklyScheduleInput, normalizeWeeklySchedule, parseHariKerjaField, serializeHariKerja, transformShiftRecord } from '../schedul-utils';
+import {
+  extractWeeklyScheduleInput,
+  normalizeWeeklySchedule,
+  parseHariKerjaField,
+  serializeHariKerja,
+  transformShiftRecord
+} from '../schedul-utils';
 import { sendNotification } from '@/app/utils/services/notificationService';
 
 const SHIFT_STATUS = ['KERJA', 'LIBUR'];
@@ -153,7 +159,17 @@ export async function PUT(req, { params }) {
         existingSchedule?.startDate ??
         existingSchedule?.start_date ??
         existingSchedule?.weekReference?.firstWeekStart;
-      const fallbackEnd = body.tanggal_selesai ?? body.end_date ?? body.endDate ?? body.selesai ?? body.until ?? body.weekEnd ?? existing.tanggal_selesai ?? existingSchedule?.endDate ?? existingSchedule?.end_date ?? null;
+      const fallbackEnd =
+        body.tanggal_selesai ??
+        body.end_date ??
+        body.endDate ??
+        body.selesai ??
+        body.until ??
+        body.weekEnd ??
+        existing.tanggal_selesai ??
+        existingSchedule?.endDate ??
+        existingSchedule?.end_date ??
+        null;
 
       try {
         const normalized = normalizeWeeklySchedule(weeklyScheduleInput, {
@@ -192,7 +208,12 @@ export async function PUT(req, { params }) {
         return NextResponse.json({ message: parseErr.message }, { status: 400 });
       }
 
-      if ((body.tanggal_mulai !== undefined || body.tanggal_selesai !== undefined) && tanggalMulai instanceof Date && tanggalSelesai instanceof Date && tanggalSelesai < tanggalMulai) {
+      if (
+        (body.tanggal_mulai !== undefined || body.tanggal_selesai !== undefined) &&
+        tanggalMulai instanceof Date &&
+        tanggalSelesai instanceof Date &&
+        tanggalSelesai < tanggalMulai
+      ) {
         return NextResponse.json({ message: "Field 'tanggal_selesai' tidak boleh lebih awal dari 'tanggal_mulai'." }, { status: 400 });
       }
     }

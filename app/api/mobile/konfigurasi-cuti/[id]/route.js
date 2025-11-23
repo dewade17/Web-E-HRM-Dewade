@@ -63,7 +63,10 @@ export async function GET(req, { params }) {
       return NextResponse.json({ ok: false, message: 'Parameter id pengguna wajib diisi.' }, { status: 400 });
     }
 
-    const existingUser = await db.user.findUnique({ where: { id_user: userId }, select: { id_user: true } });
+    const existingUser = await db.user.findUnique({
+      where: { id_user: userId },
+      select: { id_user: true, status_cuti: true },
+    });
     if (!existingUser) {
       return NextResponse.json({ ok: false, message: 'Pengguna tidak ditemukan.' }, { status: 404 });
     }
@@ -105,9 +108,14 @@ export async function GET(req, { params }) {
       },
     });
 
-    return NextResponse.json({ ok: true, data, meta: { total: data.length } });
+    return NextResponse.json({
+      ok: true,
+      data,
+      status_cuti: existingUser.status_cuti,
+      meta: { total: data.length },
+    });
   } catch (err) {
-    console.error('GET /api/mobile/cuti-konfigurasi/[id] error:', err);
+    console.error('GET /api/mobile/konfigurasi-cuti/[id] error:', err);
     return NextResponse.json({ ok: false, message: 'Gagal mengambil konfigurasi cuti.' }, { status: 500 });
   }
 }
