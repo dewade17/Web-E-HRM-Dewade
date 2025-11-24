@@ -4,11 +4,10 @@ import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { sendNotification } from '@/app/utils/services/notificationService';
 import storageClient from '@/app/api/_utils/storageClient';
-import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
+import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
-import { sendIzinSakitMessage, sendIzinSakitImage } from '@/app/utils/watzap/watzap';
 
-const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']);
+const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']); // selaras Prisma
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 const baseInclude = {
@@ -85,6 +84,7 @@ const baseInclude = {
   },
 };
 
+// tampilkan label sesuai Indonesia
 const formatStatusDisplay = (status) => {
   const s = String(status || 'pending').toLowerCase();
   if (s === 'disetujui') return 'Disetujui';
@@ -112,6 +112,7 @@ function normalizeLampiranInput(value) {
   return String(value).trim();
 }
 
+// alias 'menunggu' → 'pending'
 function normalizeStatusInput(value) {
   if (value === undefined || value === null) return null;
   const s = String(value).trim().toLowerCase();
@@ -230,7 +231,7 @@ export async function GET(req) {
     if (statusParam !== null && statusParam !== undefined && String(statusParam).trim() !== '') {
       const normalized = normalizeStatusInput(statusParam);
       if (!normalized) return NextResponse.json({ message: 'Parameter status tidak valid.' }, { status: 400 });
-      where.status = normalized;
+      where.status = normalized; // 'pending' | 'disetujui' | 'ditolak'
     }
 
     const and = [];
@@ -280,6 +281,7 @@ export async function POST(req) {
     const body = parsed.body || {};
     const approvalsInput = normalizeApprovals(body) ?? [];
 
+    // tanggal_pengajuan (opsional, nullable)
     const rawTanggalPengajuan = body.tanggal_pengajuan;
     let tanggalPengajuan;
     if (rawTanggalPengajuan === undefined) {
@@ -292,6 +294,7 @@ export async function POST(req) {
       tanggalPengajuan = parsedTanggal;
     }
 
+    // kategori
     const kategoriIdRaw = body.id_kategori_sakit ?? body.id_kategori ?? body.kategori;
     const kategoriId = kategoriIdRaw ? String(kategoriIdRaw).trim() : '';
     if (!kategoriId) return NextResponse.json({ message: "Field 'id_kategori_sakit' wajib diisi." }, { status: 400 });
@@ -301,6 +304,7 @@ export async function POST(req) {
 
     const handover = isNullLike(body.handover) ? null : String(body.handover).trim();
 
+    // lampiran
     let uploadMeta = null;
     let lampiranUrl = null;
     const lampiranFile = findFileInBody(body, ['lampiran_izin_sakit', 'lampiran', 'lampiran_file', 'file', 'lampiran_izin']);
@@ -317,6 +321,7 @@ export async function POST(req) {
       lampiranUrl = fallback ?? null;
     }
 
+    // status (default pending) — terima alias 'menunggu'
     const normalizedStatus = normalizeStatusInput(body.status ?? 'pending');
     if (!normalizedStatus) return NextResponse.json({ message: 'status tidak valid.' }, { status: 400 });
 
@@ -395,31 +400,6 @@ export async function POST(req) {
         nama_penerima: 'Rekan',
         pesan_penerima: 'Pengajuan izin sakit baru telah dibuat.',
       };
-
-      const handoverTaggedNames = Array.isArray(result.handover_users)
-        ? result.handover_users
-            .map((h) => h?.user?.nama_pengguna)
-            .filter((name) => typeof name === 'string' && name.trim())
-            .map((name) => name.trim())
-        : [];
-
-      const whatsappPayloadLines = [
-        'Pengajuan Izin Sakit Baru',
-        `Pemohon: ${basePayload.nama_pemohon}`,
-        `Kategori: ${basePayload.kategori_sakit}`,
-        `Handover: ${basePayload.handover || '-'}`,
-        `Handover Tag: ${handoverTaggedNames.length ? handoverTaggedNames.join(', ') : '-'}`,
-      ];
-
-      const whatsappMessage = whatsappPayloadLines.join('\n');
-
-      const finalLampiranUrl = result.lampiran_izin_sakit_url;
-
-      if (finalLampiranUrl) {
-        sendIzinSakitImage(finalLampiranUrl, whatsappMessage).catch((err) => console.error('Gagal kirim WA Image (Sakit):', err));
-      } else {
-        sendIzinSakitMessage(whatsappMessage).catch((err) => console.error('Gagal kirim notif teks di latar belakang:', err));
-      }
 
       const notifiedUsers = new Set();
       const notifPromises = [];
