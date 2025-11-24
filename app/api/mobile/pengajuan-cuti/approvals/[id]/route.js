@@ -77,6 +77,15 @@ function buildInclude() {
         decision: true,
         decided_at: true,
         note: true,
+        approver: {
+          select: {
+            id_user: true,
+            nama_pengguna: true,
+            email: true,
+            role: true,
+            foto_profil_user: true,
+          },
+        },
       },
     },
   };
@@ -588,10 +597,12 @@ async function handleDecision(req, { params }) {
       );
     }
 
+    const responseData = submission || null;
+
     return NextResponse.json({
       ok: true,
       message: 'Keputusan approval berhasil disimpan.',
-      data: submission,
+      data: responseData,
       shift_adjustment: shiftSyncResult,
     });
   } catch (err) {

@@ -31,6 +31,15 @@ function buildInclude() {
         decision: true,
         decided_at: true,
         note: true,
+        approver: {
+          select: {
+            id_user: true,
+            nama_pengguna: true,
+            email: true,
+            role: true,
+            foto_profil_user: true,
+          },
+        },
       },
     },
   };
@@ -99,7 +108,24 @@ async function handleDecision(req, { params }) {
       const approvals = await tx.approvalIzinSakit.findMany({
         where: { id_pengajuan_izin_sakit: approvalRecord.id_pengajuan_izin_sakit, deleted_at: null },
         orderBy: { level: 'asc' },
-        select: { id_approval_izin_sakit: true, level: true, approver_user_id: true, approver_role: true, decision: true, decided_at: true, note: true },
+        select: {
+          id_approval_izin_sakit: true,
+          level: true,
+          approver_user_id: true,
+          approver_role: true,
+          decision: true,
+          decided_at: true,
+          note: true,
+          approver: {
+            select: {
+              id_user: true,
+              nama_pengguna: true,
+              email: true,
+              role: true,
+              foto_profil_user: true,
+            },
+          },
+        },
       });
 
       const { anyApproved, allRejected, highestApprovedLevel } = summarizeApprovalStatus(approvals);

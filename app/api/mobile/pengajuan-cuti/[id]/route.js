@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
-import { ensureAuth, pengajuanInclude } from '../../route';
+import { ensureAuth, pengajuanInclude } from '@/app/api/mobile/pengajuan-cuti/route';
 import { sendNotification } from '@/app/utils/services/notificationService';
 
 const DECISION_ALLOWED = new Set(['disetujui', 'ditolak']);
 const PENDING_DECISIONS = new Set(['pending']); // ❌ hapus 'menunggu'
+const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 // --- (Fungsi-fungsi helper) ---
 
@@ -40,6 +41,8 @@ function normalizeRole(role) {
     .trim()
     .toUpperCase();
 }
+
+const isAdminRole = (role) => ADMIN_ROLES.has(normalizeRole(role));
 
 /**
  * Helper untuk mendapatkan tanggal cuti pertama (turunan) dari relasi tanggal_list.
@@ -84,6 +87,15 @@ function buildInclude() {
         decision: true,
         decided_at: true,
         note: true,
+        approver: {
+          select: {
+            id_user: true,
+            nama_pengguna: true,
+            email: true,
+            role: true,
+            foto_profil_user: true,
+          },
+        },
       },
     },
   };
@@ -550,10 +562,12 @@ async function handleDecision(req, { params }) {
       );
     }
 
+    const responseData = submission || null;
+
     return NextResponse.json({
       ok: true,
       message: 'Keputusan approval berhasil disimpan.',
-      data: submission,
+      data: responseData,
       shift_adjustment: shiftSyncResult,
     });
   } catch (err) {
@@ -569,4 +583,42 @@ export async function PATCH(req, ctx) {
 
 export async function PUT(req, ctx) {
   return handleDecision(req, ctx || {});
+}
+
+export async function DELETE(req, { params }) {
+  const auth = await ensureAuth(req);
+  if (auth instanceof NextResponse) return auth;
+
+  const actorId = auth.actor?.id;
+  const actorRole = auth.actor?.role;
+
+  if (!actorId) {
+    return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
+  }
+
+  try {
+    const { id } = params;
+
+    const existing = await db.pengajuanCuti.findUnique({
+      where: { id_pengajuan_cuti: id },
+      select: { id_pengajuan_cuti: true, id_user: true, status: true },
+    });
+
+    if (!existing) {
+      return NextResponse.json({ ok: false, message: 'Pengajuan cuti tidak ditemukan.' }, { status: 404 });
+    }
+
+    if (existing.id_user !== actorId && !isAdminRole(actorRole)) {
+      return NextResponse.json({ ok: false, message: 'Forbidden.' }, { status: 403 });
+    }
+
+    await db.pengajuanCuti.delete({
+      where: { id_pengajuan_cuti: id },
+    });
+
+    return NextResponse.json({ ok: true, message: 'Pengajuan cuti berhasil dihapus permanen.' });
+  } catch (err) {
+    console.error(err);
+    return NextResponse.json({ ok: false, message: 'Server error.' }, { status: 500 });
+  }
 }

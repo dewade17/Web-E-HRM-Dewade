@@ -35,7 +35,30 @@ const baseInclude = {
   },
   kategori: { select: { id_kategori_sakit: true, nama_kategori: true } },
   handover_users: {
-    include: { user: { select: { id_user: true, nama_pengguna: true, email: true, role: true, foto_profil_user: true } } },
+    include: {
+      user: {
+        select: {
+          id_user: true,
+          nama_pengguna: true,
+          email: true,
+          role: true,
+          foto_profil_user: true,
+          id_departement: true,
+          departement: {
+            select: {
+              id_departement: true,
+              nama_departement: true,
+            },
+          },
+          jabatan: {
+            select: {
+              id_jabatan: true,
+              nama_jabatan: true,
+            },
+          },
+        },
+      },
+    },
   },
   approvals: {
     where: { deleted_at: null },
@@ -48,6 +71,15 @@ const baseInclude = {
       decision: true,
       decided_at: true,
       note: true,
+      approver: {
+        select: {
+          id_user: true,
+          nama_pengguna: true,
+          email: true,
+          role: true,
+          foto_profil_user: true,
+        },
+      },
     },
   },
 };

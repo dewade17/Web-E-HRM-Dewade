@@ -56,6 +56,19 @@ export const pengajuanInclude = {
           email: true,
           role: true,
           foto_profil_user: true,
+          id_departement: true,
+          departement: {
+            select: {
+              id_departement: true,
+              nama_departement: true,
+            },
+          },
+          jabatan: {
+            select: {
+              id_jabatan: true,
+              nama_jabatan: true,
+            },
+          },
         },
       },
     },
@@ -71,6 +84,15 @@ export const pengajuanInclude = {
       decision: true,
       decided_at: true,
       note: true,
+      approver: {
+        select: {
+          id_user: true,
+          nama_pengguna: true,
+          email: true,
+          role: true,
+          foto_profil_user: true,
+        },
+      },
     },
   },
   // daftar tanggal cuti
@@ -88,7 +110,10 @@ const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
   year: 'numeric',
 });
 
-const normRole = (role) => String(role || '').trim().toUpperCase();
+const normRole = (role) =>
+  String(role || '')
+    .trim()
+    .toUpperCase();
 const canManageAll = (role) => ADMIN_ROLES.has(normRole(role));
 
 function formatDateISO(value) {
@@ -209,10 +234,7 @@ export async function GET(req) {
 
     const rawPage = parseInt(searchParams.get('page') || '1', 10);
     const page = Number.isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
-    const perPageRaw = parseInt(
-      searchParams.get('perPage') || searchParams.get('pageSize') || '20',
-      10
-    );
+    const perPageRaw = parseInt(searchParams.get('perPage') || searchParams.get('pageSize') || '20', 10);
     const perPageBase = Number.isNaN(perPageRaw) || perPageRaw < 1 ? 20 : perPageRaw;
     const perPage = Math.min(Math.max(perPageBase, 1), 100);
 
@@ -425,10 +447,10 @@ export async function POST(req) {
     }
 
     if (handoverIds && handoverIds.length) {
-    const users = await db.user.findMany({
-      where: { id_user: { in: handoverIds }, deleted_at: null },
-      select: { id_user: true }, // ← [FIX]
-    });
+      const users = await db.user.findMany({
+        where: { id_user: { in: handoverIds }, deleted_at: null },
+        select: { id_user: true }, // ← [FIX]
+      });
 
       const foundIds = new Set(users.map((u) => u.id_user));
       const missing = handoverIds.filter((id) => !foundIds.has(id));
@@ -583,10 +605,12 @@ export async function POST(req) {
       }
     }
 
+    const responseData = fullPengajuan || null;
+
     return NextResponse.json({
       ok: true,
       message: 'Pengajuan cuti berhasil dibuat.',
-      data: fullPengajuan,
+      data: responseData,
       upload: uploadMeta || undefined,
     });
   } catch (err) {
