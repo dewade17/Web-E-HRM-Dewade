@@ -3,7 +3,7 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { endOfUTCDay, parseDateTimeToUTC, startOfUTCDay } from '@/helpers/date-helper';
-
+import { resolveTargetUserAccess } from './access-control';
 async function ensureAuth(req) {
   const auth = req.headers.get('authorization') || '';
   if (auth.startsWith('Bearer ')) {
@@ -70,7 +70,7 @@ export async function GET(request) {
   const auth = await ensureAuth(request);
   if (auth instanceof NextResponse) return auth;
 
-  const actorId = auth.actor.id;
+  const actorId = String(auth.actor.id);
 
   try {
     const { searchParams } = new URL(request.url);
@@ -78,8 +78,10 @@ export async function GET(request) {
     const perPage = Math.min(100, Math.max(1, parseInt(searchParams.get('perPage') || '20', 10)));
 
     const userIdFilter = (searchParams.get('user_id') || '').trim();
-    const targetUserId = userIdFilter || actorId;
-
+    const { targetUserId, allowed } = resolveTargetUserAccess(auth.actor, userIdFilter);
+    if (!allowed && userIdFilter && userIdFilter !== actorId) {
+      return NextResponse.json({ ok: false, message: 'Forbidden: tidak boleh mengakses kalender pengguna lain.' }, { status: 403 });
+    }
     const fromRaw = searchParams.get('from');
     const toRaw = searchParams.get('to');
     const { from: rangeFrom, to: rangeTo } = normalizeDateRange(fromRaw, toRaw);
