@@ -1,14 +1,5 @@
-// Lightweight client for external object storage service (OSS)
-// Wraps POST /api/storage/create-upload, POST /api/storage/confirm,
-// and POST /api/storage/create-download. Uses fetch.
-//
-// Configuration via env:
-// - OSS_STORAGE_BASE_URL: base URL for the storage gateway. When falsy,
-//   requests will use relative paths (defaulting to the app's own origin).
-// - OSS_STORAGE_API_KEY: API key sent as `x-api-key` header when provided.
-
 function joinUrl(base, path) {
-  if (!base) return path; // relative
+  if (!base) return path;
   return base.replace(/\/?$/, '') + path;
 }
 
@@ -23,9 +14,7 @@ async function toJsonOrThrow(res, defaultMessage) {
   let payload = null;
   try {
     payload = await res.json();
-  } catch (_) {
-    // ignore
-  }
+  } catch (_) {}
   if (!res.ok) {
     const message = payload?.message || defaultMessage || `Storage API error (${res.status})`;
     const err = new Error(message);
@@ -46,7 +35,6 @@ function guessExt(filename) {
 }
 
 function isFileLike(value) {
-  // Works for Web File and simple test doubles
   return value && typeof value === 'object' && typeof value.arrayBuffer === 'function' && 'size' in value;
 }
 
@@ -57,15 +45,11 @@ export function createStorageClient(opts = {}) {
     baseURL,
 
     async createUpload({ mime, ext, folder = 'pengajuan', isPublic = true, checksum, expiresIn, metadata } = {}) {
-      // Build request body dynamically to allow optional fields.
-      // The storage API accepts isPublic (boolean) at the top level, along with optional checksum and expiresIn.
       const body = { mime, ext, folder };
       if (isPublic !== undefined) body.isPublic = isPublic;
       if (checksum) body.checksum = checksum;
       if (expiresIn) body.expiresIn = expiresIn;
 
-      // Preserve legacy metadata for gateways that support it. If metadata contains its own
-      // isPublic value and no explicit isPublic was provided, prefer metadata.isPublic.
       if (metadata) {
         if (metadata.isPublic !== undefined && isPublic === undefined) {
           body.isPublic = metadata.isPublic;
@@ -80,7 +64,6 @@ export function createStorageClient(opts = {}) {
       });
       const json = await toJsonOrThrow(res, 'Gagal membuat upload URL.');
 
-      // Normalize keys from various gateways
       const uploadUrl = json.uploadUrl || json.url || json.upload_url;
       const key = json.key || json.objectKey || json.object_key;
       const headers = json.uploadHeaders || json.headers || {};
@@ -92,8 +75,6 @@ export function createStorageClient(opts = {}) {
         err.payload = json;
         throw err;
       }
-      // Return the pre-signed upload URL, object key, any additional headers,
-      // and, if provided, the public URL and expiry for convenience.
       return { uploadUrl, key, headers, publicUrl, expiresIn: expires };
     },
 
@@ -104,7 +85,6 @@ export function createStorageClient(opts = {}) {
         body: JSON.stringify({ key, etag, size }),
       });
       const json = await toJsonOrThrow(res, 'Gagal konfirmasi upload.');
-      // Normalize public URL key
       const publicUrl = json.publicUrl || json.public_url || json.url;
       return { ...json, publicUrl };
     },
@@ -129,8 +109,6 @@ export function createStorageClient(opts = {}) {
 
       const client = overrideBaseURL ? createStorageClient({ baseURL: overrideBaseURL }) : this;
 
-      // Request a pre-signed upload URL. Pass through isPublic and expiresIn so that
-      // callers can control the visibility and expiration of the uploaded object.
       const { uploadUrl, key, headers, publicUrl: presignedPublicUrl } = await client.createUpload({ mime, ext, folder, isPublic, expiresIn });
 
       const buffer = Buffer.from(await file.arrayBuffer());
@@ -147,15 +125,11 @@ export function createStorageClient(opts = {}) {
         throw err;
       }
 
-      // ETag could be quoted or unquoted. Accept both.
       const etagHeader = uploadRes.headers?.get?.('etag') || uploadRes.headers?.get?.('ETag');
       const etag = etagHeader ? etagHeader.replace(/^W\//, '').replace(/^"|"$/g, '') : undefined;
       const size = typeof file.size === 'number' ? file.size : buffer.length;
 
       const confirmed = await client.confirmUpload({ key, etag, size });
-      // Determine the final public URL. Prefer the URL returned by confirmUpload,
-      // but fall back to the pre‑signed public URL (if provided) when confirmation
-      // does not include one (some gateways may omit publicUrl on confirm).
       const publicUrl = confirmed.publicUrl || confirmed.url || presignedPublicUrl || null;
 
       return { key, publicUrl, etag, size, raw: confirmed };
@@ -163,6 +137,5 @@ export function createStorageClient(opts = {}) {
   };
 }
 
-// Default singleton client using env configuration
 const defaultClient = createStorageClient();
 export default defaultClient;

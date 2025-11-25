@@ -4,10 +4,11 @@ import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { sendNotification } from '@/app/utils/services/notificationService';
 import storageClient from '@/app/api/_utils/storageClient';
-import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
+import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
+import { sendIzinSakitMessage, sendIzinSakitImage } from '@/app/utils/watzap/watzap';
 
-const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']); // selaras Prisma
+const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 const baseInclude = {
@@ -84,7 +85,6 @@ const baseInclude = {
   },
 };
 
-// tampilkan label sesuai Indonesia
 const formatStatusDisplay = (status) => {
   const s = String(status || 'pending').toLowerCase();
   if (s === 'disetujui') return 'Disetujui';
@@ -106,18 +106,26 @@ function isNullLike(value) {
   }
   return false;
 }
+
 function normalizeLampiranInput(value) {
   if (value === undefined) return undefined;
   if (isNullLike(value)) return null;
   return String(value).trim();
 }
 
-// alias 'menunggu' → 'pending'
 function normalizeStatusInput(value) {
   if (value === undefined || value === null) return null;
   const s = String(value).trim().toLowerCase();
   const mapped = s === 'menunggu' ? 'pending' : s;
   return APPROVE_STATUSES.has(mapped) ? mapped : null;
+}
+
+function cleanHandoverFormat(text) {
+  if (!text) return '-';
+  return text.replace(/@\[.*?\]\((.*?)\)/g, (match, name) => {
+    const cleanName = name.replace(/^_+|_+$/g, '').trim();
+    return `@${cleanName}`;
+  });
 }
 
 async function ensureAuth(req) {
@@ -231,7 +239,7 @@ export async function GET(req) {
     if (statusParam !== null && statusParam !== undefined && String(statusParam).trim() !== '') {
       const normalized = normalizeStatusInput(statusParam);
       if (!normalized) return NextResponse.json({ message: 'Parameter status tidak valid.' }, { status: 400 });
-      where.status = normalized; // 'pending' | 'disetujui' | 'ditolak'
+      where.status = normalized;
     }
 
     const and = [];
@@ -281,7 +289,6 @@ export async function POST(req) {
     const body = parsed.body || {};
     const approvalsInput = normalizeApprovals(body) ?? [];
 
-    // tanggal_pengajuan (opsional, nullable)
     const rawTanggalPengajuan = body.tanggal_pengajuan;
     let tanggalPengajuan;
     if (rawTanggalPengajuan === undefined) {
@@ -294,7 +301,6 @@ export async function POST(req) {
       tanggalPengajuan = parsedTanggal;
     }
 
-    // kategori
     const kategoriIdRaw = body.id_kategori_sakit ?? body.id_kategori ?? body.kategori;
     const kategoriId = kategoriIdRaw ? String(kategoriIdRaw).trim() : '';
     if (!kategoriId) return NextResponse.json({ message: "Field 'id_kategori_sakit' wajib diisi." }, { status: 400 });
@@ -304,10 +310,10 @@ export async function POST(req) {
 
     const handover = isNullLike(body.handover) ? null : String(body.handover).trim();
 
-    // lampiran
     let uploadMeta = null;
     let lampiranUrl = null;
     const lampiranFile = findFileInBody(body, ['lampiran_izin_sakit', 'lampiran', 'lampiran_file', 'file', 'lampiran_izin']);
+
     if (lampiranFile) {
       try {
         const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
@@ -321,7 +327,6 @@ export async function POST(req) {
       lampiranUrl = fallback ?? null;
     }
 
-    // status (default pending) — terima alias 'menunggu'
     const normalizedStatus = normalizeStatusInput(body.status ?? 'pending');
     if (!normalizedStatus) return NextResponse.json({ message: 'status tidak valid.' }, { status: 400 });
 
@@ -385,11 +390,14 @@ export async function POST(req) {
 
     if (result) {
       const deeplink = `/pengajuan-izin-sakit/${result.id_pengajuan_izin_sakit}`;
+
+      const cleanHandoverNote = cleanHandoverFormat(result.handover);
+
       const basePayload = {
         nama_pemohon: result.user?.nama_pengguna || 'Rekan',
         kategori_sakit: result.kategori?.nama_kategori || '-',
-        handover: result.handover || '-',
-        catatan_handover: result.handover || '-',
+        handover: cleanHandoverNote,
+        catatan_handover: cleanHandoverNote,
         status: result.status || 'pending',
         status_display: formatStatusDisplay(result.status),
         current_level: result.current_level ?? null,
@@ -400,6 +408,35 @@ export async function POST(req) {
         nama_penerima: 'Rekan',
         pesan_penerima: 'Pengajuan izin sakit baru telah dibuat.',
       };
+
+      const handoverTaggedNames = Array.isArray(result.handover_users)
+        ? result.handover_users
+            .map((h) => h?.user?.nama_pengguna)
+            .filter((name) => typeof name === 'string' && name.trim())
+            .map((name) => name.trim())
+        : [];
+
+      const whatsappPayloadLines = [
+        '*Pengajuan Izin Sakit Baru*',
+        `Pemohon: ${basePayload.nama_pemohon}`,
+        `Kategori: ${basePayload.kategori_sakit}`,
+        `Handover: ${basePayload.handover}`,
+        `Handover Tag: ${handoverTaggedNames.length ? handoverTaggedNames.join(', ') : '-'}`,
+      ];
+
+      const whatsappMessage = whatsappPayloadLines.join('\n');
+      const finalLampiranUrl = result.lampiran_izin_sakit_url;
+
+      try {
+        if (finalLampiranUrl) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          await sendIzinSakitImage(finalLampiranUrl, whatsappMessage);
+        } else {
+          await sendIzinSakitMessage(whatsappMessage);
+        }
+      } catch (waError) {
+        console.error('[WA] Gagal mengirim notifikasi WhatsApp:', waError);
+      }
 
       const notifiedUsers = new Set();
       const notifPromises = [];
