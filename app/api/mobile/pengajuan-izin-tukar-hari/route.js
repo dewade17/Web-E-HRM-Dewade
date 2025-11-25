@@ -9,7 +9,7 @@ import storageClient from '@/app/api/_utils/storageClient';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { sendNotification } from '@/app/utils/services/notificationService';
 
-const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']); // ❗ tanpa 'menunggu'
+const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
@@ -170,14 +170,8 @@ function sanitizeHandoverIds(ids) {
   return Array.from(unique);
 }
 
-/**
- * Parser serbaguna untuk input pairs. Mendukung:
- * - JSON body: { pairs: [{ hari_izin, hari_pengganti, catatan_pair? }, ...] }
- * - Form-data: pairs[]=<json-string> atau field terpisah: hari_izin[], hari_pengganti[]
- */
 function parsePairsFromBody(body) {
   if (!body) return [];
-  // 1) Bentuk JSON langsung
   if (Array.isArray(body.pairs)) {
     return body.pairs.map((p) => {
       if (typeof p === 'string') {
@@ -190,7 +184,6 @@ function parsePairsFromBody(body) {
       return p || {};
     });
   }
-  // 2) pairs[] dengan string JSON
   const arr = body['pairs[]'];
   if (arr !== undefined) {
     const list = Array.isArray(arr) ? arr : [arr];
@@ -202,7 +195,6 @@ function parsePairsFromBody(body) {
       }
     });
   }
-  // 3) dua array paralel: hari_izin[], hari_pengganti[]
   const izinArr = body['hari_izin[]'] ?? body.hari_izin;
   const gantiArr = body['hari_pengganti[]'] ?? body.hari_pengganti;
   if (izinArr !== undefined && gantiArr !== undefined) {
@@ -218,7 +210,6 @@ function parsePairsFromBody(body) {
   return [];
 }
 
-/** Validasi & normalisasi pairs → array {hari_izin: Date, hari_pengganti: Date, catatan_pair?: string} */
 async function validateAndNormalizePairs(userId, pairsRaw) {
   if (!Array.isArray(pairsRaw) || pairsRaw.length === 0) {
     return { ok: false, status: 400, message: 'pairs wajib diisi minimal 1 pasangan hari.' };
@@ -256,7 +247,6 @@ async function validateAndNormalizePairs(userId, pairsRaw) {
     normalized.push({ hari_izin: izin, hari_pengganti: ganti, catatan_pair: note });
   }
 
-  // Cek tabrakan dengan pengajuan tukar-hari lain milik user (status pending/disetujui)
   const izinDates = normalized.map((p) => p.hari_izin);
   const gantiDates = normalized.map((p) => p.hari_pengganti);
 
@@ -266,7 +256,7 @@ async function validateAndNormalizePairs(userId, pairsRaw) {
       izin_tukar_hari: {
         id_user: userId,
         deleted_at: null,
-        status: { in: ['pending', 'disetujui'] }, // ❗ tanpa 'menunggu'
+        status: { in: ['pending', 'disetujui'] },
       },
     },
     select: { hari_izin: true, hari_pengganti: true },
@@ -277,7 +267,6 @@ async function validateAndNormalizePairs(userId, pairsRaw) {
     return { ok: false, status: 409, message: `Terdapat pasangan yang sudah diajukan sebelumnya: ${details}.` };
   }
 
-  // Cek bentrok cuti disetujui
   const cutiBentrok = await db.pengajuanCutiTanggal.findMany({
     where: {
       tanggal_cuti: { in: [...izinDates, ...gantiDates] },
@@ -297,7 +286,6 @@ async function validateAndNormalizePairs(userId, pairsRaw) {
   return { ok: true, value: normalized };
 }
 
-/* ============================ GET (List) ============================ */
 export async function GET(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -321,7 +309,6 @@ export async function GET(req) {
     const kategori = (searchParams.get('kategori') || '').trim();
     const targetUser = (searchParams.get('id_user') || '').trim();
 
-    // Filter tanggal pada pair:
     const hariIzinEq = searchParams.get('hari_izin');
     const hariIzinFrom = searchParams.get('hari_izin_from');
     const hariIzinTo = searchParams.get('hari_izin_to');
@@ -331,7 +318,6 @@ export async function GET(req) {
 
     const where = { deleted_at: null, jenis_pengajuan: 'hari' };
 
-    // Scope akses
     if (canManageAll(auth.actor?.role)) {
       if (targetUser) where.id_user = targetUser;
     } else {
@@ -339,13 +325,11 @@ export async function GET(req) {
     }
 
     if (status) {
-      where.status = status; // 'pending' | 'disetujui' | 'ditolak'
+      where.status = status;
     }
     if (kategori) where.kategori = kategori;
 
-    // Filter lewat relasi pairs
     const pairFilter = {};
-    // hari_izin
     if (hariIzinEq) {
       const eq = parseDateQuery(hariIzinEq);
       if (!eq) return NextResponse.json({ ok: false, message: 'Parameter hari_izin tidak valid.' }, { status: 400 });
@@ -357,7 +341,6 @@ export async function GET(req) {
       if (hariIzinTo && !lte) return NextResponse.json({ ok: false, message: 'Parameter hari_izin_to tidak valid.' }, { status: 400 });
       pairFilter.hari_izin = { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) };
     }
-    // hari_pengganti
     if (hariPenggantiEq) {
       const eq = parseDateQuery(hariPenggantiEq);
       if (!eq) return NextResponse.json({ ok: false, message: 'Parameter hari_pengganti tidak valid.' }, { status: 400 });
@@ -396,7 +379,6 @@ export async function GET(req) {
   }
 }
 
-/* ============================ POST (Create) ============================ */
 export async function POST(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -426,7 +408,6 @@ export async function POST(req) {
 
     const jenis_pengajuan = 'hari';
 
-    // Handover tags
     const handoverIdsInput = body?.['handover_tag_user_ids[]'] ?? body?.handover_tag_user_ids;
     const handoverIds = sanitizeHandoverIds(handoverIdsInput);
     if (handoverIds && handoverIds.length) {
@@ -441,7 +422,6 @@ export async function POST(req) {
       }
     }
 
-    // Lampiran (opsional)
     let uploadMeta = null;
     let lampiranUrl = null;
     const lampiranFile = findFileInBody(body, ['lampiran_izin_tukar_hari', 'lampiran', 'lampiran_file', 'file']);
@@ -455,7 +435,6 @@ export async function POST(req) {
       }
     }
 
-    // Pairs
     const pairsRaw = parsePairsFromBody(body);
     const pairsCheck = await validateAndNormalizePairs(actorId, pairsRaw);
     if (!pairsCheck.ok) {
@@ -463,25 +442,23 @@ export async function POST(req) {
     }
     const pairs = pairsCheck.value;
 
-    // Approvals (opsional)
-    // --- PERBAIKAN DI SINI ---
-    // Baca dari body.approvals (untuk JSON) atau body['approvals[]'] (untuk form-data)
     const rawApprovals = body.approvals ?? body['approvals[]'];
     let approvals = [];
     if (rawApprovals !== undefined) {
       const list = Array.isArray(rawApprovals) ? rawApprovals : [rawApprovals];
-      // --- AKHIR PERBAIKAN ---
-      approvals = list.map((a) => {
+
+      approvals = list.flatMap((a) => {
         if (typeof a === 'string') {
           try {
-            return JSON.parse(a);
+            const parsed = JSON.parse(a);
+            return Array.isArray(parsed) ? parsed : [parsed];
           } catch {
-            return {};
+            return [{}];
           }
         }
-        return a || {};
+        return [a || {}];
       });
-      // validasi user id kalau ada
+
       const approverIds = approvals.map((a) => a.approver_user_id).filter(Boolean);
       if (approverIds.length) {
         const users = await db.user.findMany({
@@ -496,7 +473,6 @@ export async function POST(req) {
       }
     }
 
-    // Transaksi pembuatan
     const full = await db.$transaction(async (tx) => {
       const created = await tx.izinTukarHari.create({
         data: {
@@ -529,7 +505,7 @@ export async function POST(req) {
             level: Number.isFinite(+a.level) ? +a.level : idx + 1,
             approver_user_id: a.approver_user_id ? String(a.approver_user_id) : null,
             approver_role: a.approver_role ? String(a.approver_role) : null,
-            decision: 'pending', // ❗ default enum
+            decision: 'pending',
           }))
           .sort((x, y) => x.level - y.level);
         await tx.approvalIzinTukarHari.createMany({ data: rows, skipDuplicates: true });
@@ -551,7 +527,6 @@ export async function POST(req) {
       });
     });
 
-    // Notifikasi sederhana (pemohon & handover)
     if (full) {
       const deeplink = `/izin-tukar-hari/${full.id_izin_tukar_hari}`;
       const firstPair = (full.pairs || [])[0];
@@ -567,7 +542,6 @@ export async function POST(req) {
 
       const promises = [];
 
-      // notif ke pemohon
       promises.push(
         sendNotification(
           'SWAP_CREATE_SUCCESS',
@@ -583,7 +557,6 @@ export async function POST(req) {
         )
       );
 
-      // notif ke handover tags
       if (Array.isArray(full.handover_users)) {
         const sent = new Set();
         for (const h of full.handover_users) {
@@ -608,6 +581,43 @@ export async function POST(req) {
         }
       }
 
+      if (Array.isArray(full.approvals) && full.approvals.length) {
+        const approverIds = full.approvals.map((a) => a.approver_user_id).filter(Boolean);
+
+        if (approverIds.length) {
+          const approvers = await db.user.findMany({
+            where: {
+              id_user: { in: approverIds },
+              deleted_at: null,
+            },
+            select: { id_user: true, nama_pengguna: true },
+          });
+
+          for (const admin of approvers) {
+            const uid = admin.id_user;
+            if (!uid || uid === full.id_user) continue;
+
+            const overrideTitle = `${full.user?.nama_pengguna || 'Karyawan'} mengajukan tukar hari`;
+            const overrideBody = `${full.user?.nama_pengguna || 'Karyawan'} mengajukan tukar hari kategori ${bodyBase.kategori} pada ${bodyBase.hari_izin_display}.`;
+
+            promises.push(
+              sendNotification(
+                'SWAP_HANDOVER_TAGGED',
+                uid,
+                {
+                  ...bodyBase,
+                  nama_penerima: admin.nama_pengguna || 'Admin',
+                  title: overrideTitle,
+                  body: overrideBody,
+                  overrideTitle,
+                  overrideBody,
+                },
+                { deeplink }
+              )
+            );
+          }
+        }
+      }
       await Promise.allSettled(promises);
     }
 

@@ -3,6 +3,7 @@ import db from '@/lib/prisma';
 import { ensureAuth, pengajuanInclude } from '../route';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import storageClient from '@/app/api/_utils/storageClient';
+import { parseDateOnlyToUTC } from '@/helpers/date-helper'; // Pastikan helper ini diimport
 
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
@@ -42,20 +43,45 @@ async function handleUpdate(req, { params }) {
     return NextResponse.json({ ok: false, message: 'Pengajuan cuti tidak ditemukan.' }, { status: 404 });
   }
 
+  // Validasi kepemilikan
   if (existing.id_user !== actorId) {
     return NextResponse.json({ ok: false, message: 'Anda tidak memiliki akses untuk mengedit data ini.' }, { status: 403 });
   }
 
+  // Ambil field dasar
   const keperluan = body.keperluan;
   const handover = body.handover;
   const id_kategori_cuti = body.id_kategori_cuti;
 
+  // --- PERBAIKAN: Parse Tanggal Masuk Kerja ---
   let tanggalMasukKerja = undefined;
   if (body.tanggal_masuk_kerja) {
-    const d = new Date(body.tanggal_masuk_kerja);
-    if (!isNaN(d.getTime())) tanggalMasukKerja = d;
+    // Gunakan helper yang sama dengan create agar konsisten (UTC)
+    const d = parseDateOnlyToUTC(body.tanggal_masuk_kerja);
+    if (d) tanggalMasukKerja = d;
   }
 
+  // --- PERBAIKAN UTAMA: Parse List Tanggal Cuti Baru ---
+  let parsedCutiDates = [];
+  // Cek berbagai kemungkinan key yang dikirim oleh Flutter
+  const tanggalCutiInput = body['tanggal_list[]'] ?? body['tanggal_list'] ?? body['tanggal_cuti[]'] ?? body['tanggal_cuti'];
+
+  if (tanggalCutiInput) {
+    const tanggalCutiArray = Array.isArray(tanggalCutiInput) ? tanggalCutiInput : [tanggalCutiInput];
+
+    for (const raw of tanggalCutiArray) {
+      const tgl = parseDateOnlyToUTC(raw);
+      if (tgl) {
+        parsedCutiDates.push(tgl);
+      }
+    }
+    // Validasi: Tanggal cuti tidak boleh kosong jika user berniat mengupdatenya
+    if (parsedCutiDates.length === 0) {
+      return NextResponse.json({ ok: false, message: 'Format tanggal cuti tidak valid.' }, { status: 400 });
+    }
+  }
+
+  // --- Upload Lampiran ---
   let lampiranUrl = undefined;
   const lampiranFile = findFileInBody(body, ['lampiran_cuti', 'file', 'lampiran']);
 
@@ -77,19 +103,52 @@ async function handleUpdate(req, { params }) {
       if (tanggalMasukKerja !== undefined) updateData.tanggal_masuk_kerja = tanggalMasukKerja;
       if (lampiranUrl !== undefined) updateData.lampiran_cuti_url = lampiranUrl;
 
+      // Reset status ke pending jika di-edit (Opsional, tergantung aturan bisnis Anda)
+      // updateData.status = 'pending';
+
+      // 1. Update Data Utama
       const updated = await tx.pengajuanCuti.update({
         where: { id_pengajuan_cuti: id },
         data: updateData,
-        include: pengajuanInclude,
       });
 
-      return updated;
+      // 2. Update Relasi Tanggal Cuti (Jika ada perubahan tanggal)
+      if (parsedCutiDates.length > 0) {
+        // A. Hapus semua tanggal lama untuk pengajuan ini
+        await tx.pengajuanCutiTanggal.deleteMany({
+          where: { id_pengajuan_cuti: id },
+        });
+
+        // B. Masukkan tanggal-tanggal baru
+        await tx.pengajuanCutiTanggal.createMany({
+          data: parsedCutiDates.map((tgl) => ({
+            id_pengajuan_cuti: id,
+            tanggal_cuti: tgl,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      // 3. Return data lengkap dengan include
+      return tx.pengajuanCuti.findUnique({
+        where: { id_pengajuan_cuti: id },
+        include: pengajuanInclude,
+      });
     });
+
+    // Transformasi data response agar sesuai format GET (optional, agar UI langsung update)
+    const itemsProcessed = { ...result };
+    if (itemsProcessed.tanggal_list) {
+      const dates = itemsProcessed.tanggal_list.map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))).sort((a, b) => a.getTime() - b.getTime());
+
+      itemsProcessed.tanggal_cuti = dates.length ? dates[0] : null;
+      itemsProcessed.tanggal_selesai = dates.length ? dates[dates.length - 1] : null;
+    }
 
     return NextResponse.json({
       ok: true,
       message: 'Pengajuan cuti berhasil diperbarui.',
-      data: result,
+      data: itemsProcessed,
     });
   } catch (err) {
     console.error('Update Error:', err);
@@ -131,6 +190,11 @@ export async function DELETE(req, { params }) {
     if (existing.id_user !== actorId && !isAdminRole(actorRole)) {
       return NextResponse.json({ ok: false, message: 'Forbidden.' }, { status: 403 });
     }
+
+    // Karena relasi di Prisma biasanya cascade (atau perlu dihapus manual jika tidak),
+    // pastikan `onDelete: Cascade` ada di schema.prisma untuk PengajuanCutiTanggal.
+    // Jika tidak, hapus manual dulu:
+    // await db.pengajuanCutiTanggal.deleteMany({ where: { id_pengajuan_cuti: id } });
 
     await db.pengajuanCuti.delete({
       where: { id_pengajuan_cuti: id },

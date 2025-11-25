@@ -600,6 +600,47 @@ export async function POST(req) {
         );
         notifiedUsers.add(fullPengajuan.id_user);
       }
+      // === Notif ke approver (rantai persetujuan) ===
+      if (Array.isArray(fullPengajuan.approvals) && fullPengajuan.approvals.length) {
+        const approverIds = fullPengajuan.approvals.map((a) => a.approver_user_id).filter(Boolean);
+
+        if (approverIds.length) {
+          const approvers = await db.user.findMany({
+            where: {
+              id_user: { in: approverIds },
+              deleted_at: null,
+            },
+            select: { id_user: true, nama_pengguna: true },
+          });
+
+          for (const approver of approvers) {
+            const uid = approver.id_user;
+            if (!uid || notifiedUsers.has(uid)) continue;
+            notifiedUsers.add(uid);
+
+            const overrideTitle = `${basePayload.nama_pemohon} mengajukan cuti`;
+            const overrideBody = `${basePayload.nama_pemohon} mengajukan cuti ${basePayload.kategori_cuti} pada ${basePayload.tanggal_cuti_display}.`;
+
+            notifPromises.push(
+              sendNotification(
+                'LEAVE_HANDOVER_TAGGED',
+                uid,
+                {
+                  ...basePayload,
+                  is_approver: true,
+                  nama_penerima: approver.nama_pengguna || 'Admin',
+                  title: overrideTitle,
+                  body: overrideBody,
+                  overrideTitle,
+                  overrideBody,
+                },
+                { deeplink }
+              )
+            );
+          }
+        }
+      }
+
       if (notifPromises.length) {
         await Promise.allSettled(notifPromises);
       }

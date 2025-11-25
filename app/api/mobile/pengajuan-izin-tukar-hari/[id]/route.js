@@ -281,7 +281,17 @@ export async function PUT(req, { params }) {
     if (body.approvals !== undefined) {
       const raw = Array.isArray(body.approvals) ? body.approvals : [body.approvals];
       const rows = raw
-        .map((a, idx) => (typeof a === 'string' ? safeJson(a) : a || {}))
+        .flatMap((a) => {
+          if (typeof a === 'string') {
+            try {
+              const parsed = safeJson(a);
+              return Array.isArray(parsed) ? parsed : [parsed];
+            } catch {
+              return [{}];
+            }
+          }
+          return [a || {}];
+        })
         .map((a, idx) => ({
           level: Number.isFinite(+a.level) ? +a.level : idx + 1,
           approver_user_id: a.approver_user_id ? String(a.approver_user_id) : null,
@@ -298,7 +308,7 @@ export async function PUT(req, { params }) {
         const okIds = new Set(users.map((u) => u.id_user));
         const notFound = approverIds.filter((x) => !okIds.has(x));
         if (notFound.length) {
-          return { ok: false, status: 400, message: 'Beberapa approver_user_id tidak ditemukan.' };
+          return NextResponse.json({ ok: false, message: 'Beberapa approver_user_id tidak ditemukan.' }, { status: 400 });
         }
       }
       approvalsReplace = rows;

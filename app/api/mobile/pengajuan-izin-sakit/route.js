@@ -496,6 +496,41 @@ export async function POST(req) {
         notifiedUsers.add(actorId);
       }
 
+      // === Notif ke approver (rantai persetujuan) ===
+      if (Array.isArray(result.approvals) && result.approvals.length) {
+        const approverIds = result.approvals.map((a) => a.approver_user_id).filter(Boolean);
+
+        if (approverIds.length) {
+          const approvers = await db.user.findMany({
+            where: {
+              id_user: { in: approverIds },
+              deleted_at: null,
+            },
+            select: { id_user: true, nama_pengguna: true },
+          });
+
+          for (const approver of approvers) {
+            const uid = approver.id_user;
+            if (!uid || notifiedUsers.has(uid)) continue;
+            notifiedUsers.add(uid);
+
+            notifPromises.push(
+              sendNotification(
+                'IZIN_SAKIT_HANDOVER_TAGGED',
+                uid,
+                {
+                  ...basePayload,
+                  is_approver: true,
+                  nama_penerima: approver.nama_pengguna || 'Admin',
+                  pesan_penerima: `${basePayload.nama_pemohon} mengajukan izin sakit dan menunggu persetujuan Anda.`,
+                },
+                { deeplink }
+              )
+            );
+          }
+        }
+      }
+
       if (notifPromises.length) await Promise.allSettled(notifPromises);
     }
 
