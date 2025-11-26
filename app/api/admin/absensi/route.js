@@ -26,13 +26,7 @@ export async function GET(req) {
 
   try {
     const { claims, session } = auth;
-    const actorId =
-      claims?.sub ||
-      claims?.id_user ||
-      claims?.userId ||
-      claims?.id ||
-      session?.user?.id ||
-      session?.user?.id_user;
+    const actorId = claims?.sub || claims?.id_user || claims?.userId || claims?.id || session?.user?.id || session?.user?.id_user;
 
     if (!actorId) {
       return NextResponse.json({ message: 'Payload token tidak sesuai' }, { status: 401 });
@@ -78,15 +72,28 @@ export async function GET(req) {
                 orderBy: [{ start_istirahat: 'asc' }],
                 select: {
                   id_istirahat: true,
-                  tanggal_istirahat: true,
-                  start_istirahat: true,
-                  end_istirahat: true,
-                  start_istirahat_latitude: true,
-                  start_istirahat_longitude: true,
-                  end_istirahat_latitude: true,
-                  end_istirahat_longitude: true,
-                  created_at: true,
-                  updated_at: true,
+                  absensi: {
+                    select: {
+                      lokasiIn: {
+                        select: {
+                          id_location: true,
+                          nama_kantor: true,
+                          latitude: true,
+                          longitude: true,
+                          radius: true,
+                        },
+                      },
+                      lokasiOut: {
+                        select: {
+                          id_location: true,
+                          nama_kantor: true,
+                          latitude: true,
+                          longitude: true,
+                          radius: true,
+                        },
+                      },
+                    },
+                  },
                 },
               },
               lokasiIn: {

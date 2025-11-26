@@ -1,48 +1,22 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
-import { verifyAuthToken } from '@/lib/jwt';
-import { authenticateRequest } from '@/app/utils/auth/authUtils';
-
-async function resolveUserId(request) {
-  const authHeader = request.headers.get('authorization') || '';
-
-  if (authHeader.startsWith('Bearer ')) {
-    const rawToken = authHeader.slice(7).trim();
-    try {
-      const payload = verifyAuthToken(rawToken);
-      const userId = payload?.id_user || payload?.sub || payload?.userId || payload?.id || payload?.user_id;
-
-      if (userId) {
-        return { userId, source: 'bearer' };
-      }
-    } catch (error) {
-      // Jika token bearer tidak valid, lanjut mencoba autentikasi session
-      console.warn('Invalid bearer token for /api/notifications:', error);
-    }
-  }
-
-  const sessionOrResponse = await authenticateRequest();
-  if (sessionOrResponse instanceof NextResponse) {
-    return sessionOrResponse;
-  }
-
-  const sessionUserId = sessionOrResponse?.user?.id || sessionOrResponse?.user?.id_user;
-  if (!sessionUserId) {
-    return NextResponse.json({ ok: false, message: 'Unauthorized' }, { status: 401 });
-  }
-
-  return { userId: sessionUserId, source: 'session', session: sessionOrResponse };
-}
+import { ensureNotificationAuth } from './_auth';
 
 function sanitizeString(value) {
   if (value === undefined || value === null) return null;
   const str = String(value).trim();
   return str.length ? str : null;
 }
+
+// GET /api/notifications -> list dengan pagination
 export async function GET(request) {
-  const authResult = await resolveUserId(request);
-  if (authResult instanceof NextResponse) return authResult;
-  const { userId } = authResult;
+  const auth = await ensureNotificationAuth(request);
+  if (auth instanceof NextResponse) return auth;
+
+  const userId = auth.actor?.id;
+  if (!userId) {
+    return NextResponse.json({ ok: false, message: 'Unauthorized' }, { status: 401 });
+  }
 
   try {
     const { searchParams } = new URL(request.url);
@@ -50,7 +24,8 @@ export async function GET(request) {
     const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get('pageSize') || '20', 10)));
     const status = (searchParams.get('status') || '').trim().toLowerCase();
 
-    const where = { id_user: userId };
+    const where = { id_user: userId, deleted_at: null };
+
     if (['read', 'unread', 'archived'].includes(status)) {
       where.status = status;
     }
@@ -65,6 +40,7 @@ export async function GET(request) {
       }),
     ]);
 
+    // ⚠️ PENTING: bentuk response sama seperti versi lama
     return NextResponse.json({
       data: items,
       pagination: {
@@ -75,21 +51,25 @@ export async function GET(request) {
       },
     });
   } catch (error) {
-    console.error('Failed to fetch notifications:', error);
+    console.error('GET /api/notifications error:', error);
     return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
   }
 }
 
+// POST /api/notifications -> register device token (FCM)
 export async function POST(request) {
-  const authResult = await resolveUserId(request);
-  if (authResult instanceof NextResponse) return authResult;
+  const auth = await ensureNotificationAuth(request);
+  if (auth instanceof NextResponse) return auth;
 
-  const { userId } = authResult;
+  const userId = auth.actor?.id;
+  if (!userId) {
+    return NextResponse.json({ ok: false, message: 'Unauthorized' }, { status: 401 });
+  }
 
   let payload;
   try {
     payload = await request.json();
-  } catch (error) {
+  } catch {
     return NextResponse.json({ ok: false, message: 'Invalid JSON body' }, { status: 400 });
   }
 
@@ -118,10 +98,7 @@ export async function POST(request) {
 
   try {
     const existing = await db.device.findFirst({
-      where: {
-        id_user: userId,
-        fcm_token: fcmToken,
-      },
+      where: { id_user: userId, fcm_token: fcmToken },
     });
 
     const selectFields = {
@@ -136,13 +113,7 @@ export async function POST(request) {
     };
 
     let record;
-
     if (existing) {
-      console.info('Updating existing notification device', {
-        userId,
-        id_device: existing.id_device,
-      });
-
       record = await db.device.update({
         where: { id_device: existing.id_device },
         data: {
@@ -153,33 +124,19 @@ export async function POST(request) {
         select: selectFields,
       });
     } else {
-      console.info('Creating notification device', { userId });
-
       record = await db.device.create({
-        data: {
-          id_user: userId,
-          ...deviceData,
-        },
+        data: { id_user: userId, ...deviceData },
         select: selectFields,
       });
     }
 
-    return NextResponse.json(
-      {
-        ok: true,
-        message: 'Device token registered',
-        data: record,
-      },
-      { status: 200 }
-    );
+    return NextResponse.json({
+      ok: true,
+      message: 'Device token registered',
+      data: record,
+    });
   } catch (error) {
     console.error('Failed to register notification token:', error);
-    return NextResponse.json(
-      {
-        ok: false,
-        message: 'Failed to register notification token',
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, message: 'Failed to register notification token' }, { status: 500 });
   }
 }
