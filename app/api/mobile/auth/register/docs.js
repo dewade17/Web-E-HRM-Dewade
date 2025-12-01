@@ -5,66 +5,60 @@ import db from '@/lib/prisma'; // Menggunakan instance Prisma singleton kamu
 /**
  * @swagger
  * /api/mobile/auth/register:
- * post:
- * summary: Registrasi Karyawan Baru
- * description: Mendaftarkan akun karyawan baru dengan role default 'KARYAWAN'.
- * tags:
- * - Auth
- * requestBody:
- * required: true
- * content:
- * application/json:
- * schema:
- * type: object
- * required:
- * - nama
- * - email
- * - password
- * - nik
- * properties:
- * nama:
- * type: string
- * example: Budi Santoso
- * email:
- * type: string
- * format: email
- * example: budi@company.com
- * password:
- * type: string
- * format: password
- * example: Rahasia123!
- * nik:
- * type: string
- * description: Nomor Induk Karyawan
- * example: EMP-2024-001
- * kontak:
- * type: string
- * example: 081234567890
- * responses:
- * 201:
- * description: Berhasil registrasi
- * content:
- * application/json:
- * schema:
- * type: object
- * properties:
- * message:
- * type: string
- * data:
- * type: object
- * properties:
- * id_user:
- * type: string
- * nama_pengguna:
- * type: string
- * email:
- * type: string
- * 400:
- * description: Data tidak lengkap
- * 409:
- * description: Email atau NIK sudah terdaftar
- * 500:
- * description: Terjadi kesalahan server
+ *   post:
+ *     summary: Registrasi Karyawan Baru
+ *     description: Mendaftarkan akun karyawan baru dengan role default 'KARYAWAN'.
+ *     tags:
+ *       - Auth
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - nama
+ *               - email
+ *               - password
+ *             properties:
+ *               nama:
+ *                 type: string
+ *                 example: Budi Santoso
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: budi@company.com
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 example: Rahasia123!
+ *     responses:
+ *       '201':
+ *         description: Berhasil registrasi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id_user:
+ *                       type: string
+ *                     nama_pengguna:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *       '400':
+ *         description: Data tidak lengkap
+ *       '409':
+ *         description: Email sudah terdaftar
+ *       '500':
+ *         description: Terjadi kesalahan server
  */
 
 const registerDocs = {};
