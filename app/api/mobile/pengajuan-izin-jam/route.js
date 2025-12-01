@@ -475,11 +475,26 @@ export async function POST(req) {
           if (!taggedId || notifiedUsers.has(taggedId)) continue;
           notifiedUsers.add(taggedId);
 
-          const overrideTitle = `${basePayload.nama_pemohon} mengajukan izin jam`;
-          const overrideBody = `${basePayload.nama_pemohon} menandai Anda sebagai handover untuk izin jam ${basePayload.kategori_izin} pada ${basePayload.tanggal_izin_display} (${waktuRentangDisplay}).`;
+          // PERUBAHAN: Pesan spesifik untuk Handover (menambahkan isi handover ke body)
+          const handoverTitle = `${basePayload.nama_pemohon} menandai Anda`;
+          const handoverBody = `Anda ditunjuk sebagai handover oleh ${basePayload.nama_pemohon}. ${basePayload.handover || ''}`;
 
           notifPromises.push(
-            sendNotification('IZIN_JAM_HANDOVER_TAGGED', taggedId, { ...basePayload, nama_penerima: h?.user?.nama_pengguna || undefined, title: overrideTitle, body: overrideBody, overrideTitle, overrideBody }, { deeplink })
+            sendNotification(
+              'IZIN_JAM_HANDOVER_TAGGED',
+              taggedId,
+              {
+                ...basePayload,
+                handover: basePayload.handover,
+                nama_penerima: h?.user?.nama_pengguna || 'Rekan',
+                pesan_penerima: handoverBody,
+                title: handoverTitle,
+                body: handoverBody,
+                overrideTitle: handoverTitle,
+                overrideBody: handoverBody,
+              },
+              { deeplink }
+            )
           );
         }
       }

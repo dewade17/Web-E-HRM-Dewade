@@ -34,7 +34,7 @@ export async function PUT(request) {
       data: { updatedCount: result.count },
     });
   } catch (error) {
-    console.error('PUT /api/notifications/mark-all-read error:', error);
+    console.error('PUT /api/notifications/mark-all-as-read error:', error);
     return NextResponse.json({ ok: false, message: 'Internal Server Error' }, { status: 500 });
   }
 }

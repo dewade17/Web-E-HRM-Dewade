@@ -538,6 +538,7 @@ export async function POST(req) {
         related_table: 'izin_tukar_hari',
         related_id: full.id_izin_tukar_hari,
         deeplink,
+        handover: full.handover, // Pastikan handover ada di bodyBase
       };
 
       const promises = [];
@@ -563,6 +564,11 @@ export async function POST(req) {
           const uid = h?.id_user_tagged;
           if (!uid || sent.has(uid)) continue;
           sent.add(uid);
+
+          // PERUBAHAN: Pesan spesifik untuk Handover
+          const handoverTitle = `${full.user?.nama_pengguna || 'Rekan'} menandai Anda`;
+          const handoverBody = `Anda ditunjuk sebagai handover oleh ${full.user?.nama_pengguna || 'Rekan'}. ${bodyBase.handover || ''}`;
+
           promises.push(
             sendNotification(
               'SWAP_HANDOVER_TAGGED',
@@ -570,10 +576,11 @@ export async function POST(req) {
               {
                 ...bodyBase,
                 nama_penerima: h?.user?.nama_pengguna || undefined,
-                title: `${full.user?.nama_pengguna || 'Rekan'} mengajukan tukar hari`,
-                body: `${full.user?.nama_pengguna || 'Rekan'} menandai Anda untuk pengajuan tukar hari pada ${hariIzinDisplay}.`,
-                overrideTitle: `${full.user?.nama_pengguna || 'Rekan'} mengajukan tukar hari`,
-                overrideBody: `${full.user?.nama_pengguna || 'Rekan'} menandai Anda pada ${hariIzinDisplay}.`,
+                pesan_penerima: handoverBody, // Pesan spesifik
+                title: handoverTitle, // Judul spesifik
+                body: handoverBody, // Body spesifik dengan isi handover
+                overrideTitle: handoverTitle, // Override judul
+                overrideBody: handoverBody, // Override body
               },
               { deeplink }
             )

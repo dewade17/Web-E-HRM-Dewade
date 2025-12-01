@@ -1,4 +1,5 @@
-// app/api/mobile/pengajuan-izin-sakit/route.js
+export const runtime = 'nodejs';
+
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
@@ -313,7 +314,6 @@ export async function POST(req) {
     const body = parsed.body || {};
     const approvalsInput = normalizeApprovals(body) ?? [];
 
-    // tanggal_pengajuan (opsional)
     const rawTanggalPengajuan = body.tanggal_pengajuan;
     let tanggalPengajuan;
     if (rawTanggalPengajuan === undefined) {
@@ -346,7 +346,6 @@ export async function POST(req) {
 
     const handover = isNullLike(body.handover) ? null : String(body.handover).trim();
 
-    // Lampiran
     let uploadMeta = null;
     let lampiranUrl = null;
     const lampiranFile = findFileInBody(body, ['lampiran_izin_sakit', 'lampiran', 'lampiran_file', 'file', 'lampiran_izin']);
@@ -490,7 +489,6 @@ export async function POST(req) {
         ? `${basePayload.nama_pemohon} mengajukan izin sakit kategori ${basePayload.kategori_sakit} pada ${tanggalPengajuanDisplay}.`
         : `${basePayload.nama_pemohon} mengajukan izin sakit kategori ${basePayload.kategori_sakit}.`;
 
-      // ========== WhatsApp ==========
       const handoverTaggedNames = Array.isArray(result.handover_users)
         ? result.handover_users
             .map((h) => h?.user?.nama_pengguna)
@@ -513,38 +511,28 @@ export async function POST(req) {
         if (finalLampiranUrl) {
           await new Promise((resolve) => setTimeout(resolve, 3000));
           await sendIzinSakitImage(finalLampiranUrl, whatsappMessage);
-          // Tambahkan log untuk sukses pengiriman gambar
           console.log('[WA] Sukses mengirim notifikasi WhatsApp (dengan gambar) untuk pengajuan:', result.id_pengajuan_izin_sakit);
         } else {
           await sendIzinSakitMessage(whatsappMessage);
-          // Tambahkan log untuk sukses pengiriman teks
           console.log('[WA] Sukses mengirim notifikasi WhatsApp (teks) untuk pengajuan:', result.id_pengajuan_izin_sakit);
         }
       } catch (waError) {
         console.error('[WA] Gagal mengirim notifikasi WhatsApp:', waError);
       }
 
-      try {
-        if (finalLampiranUrl) {
-          await new Promise((resolve) => setTimeout(resolve, 3000));
-          await sendIzinSakitImage(finalLampiranUrl, whatsappMessage);
-        } else {
-          await sendIzinSakitMessage(whatsappMessage);
-        }
-      } catch (waError) {
-        console.error('[WA] Gagal mengirim notifikasi WhatsApp:', waError);
-      }
-
-      // ========== Notifikasi in-app ==========
       const notifiedUsers = new Set();
       const notifPromises = [];
 
-      // 1) Handover tag
       if (Array.isArray(result.handover_users)) {
         for (const h of result.handover_users) {
           const taggedId = h?.id_user_tagged;
           if (!taggedId || notifiedUsers.has(taggedId)) continue;
           notifiedUsers.add(taggedId);
+
+          // --- PERBAIKAN UTAMA DI SINI ---
+          // Buat pesan spesifik untuk Handover
+          const handoverTitle = `${basePayload.nama_pemohon} menandai Anda`;
+          const handoverBody = `Anda ditunjuk sebagai handover oleh ${basePayload.nama_pemohon}. ${basePayload.handover}`;
 
           notifPromises.push(
             sendNotification(
@@ -552,12 +540,13 @@ export async function POST(req) {
               taggedId,
               {
                 ...basePayload,
+                handover: basePayload.handover,
                 nama_penerima: h?.user?.nama_pengguna || 'Rekan',
-                pesan_penerima: `Anda ditunjuk sebagai handover oleh ${basePayload.nama_pemohon}.`,
-                title: overrideTitle,
-                body: overrideBody,
-                overrideTitle,
-                overrideBody,
+                pesan_penerima: handoverBody,
+                title: handoverTitle, // Pakai pesan spesifik
+                body: handoverBody, // Pakai pesan spesifik
+                overrideTitle: handoverTitle, // Pakai pesan spesifik
+                overrideBody: handoverBody, // Pakai pesan spesifik
               },
               { deeplink }
             )
@@ -565,7 +554,6 @@ export async function POST(req) {
         }
       }
 
-      // 2) Pemohon
       if (result.id_user && !notifiedUsers.has(result.id_user)) {
         notifPromises.push(
           sendNotification(
@@ -587,7 +575,6 @@ export async function POST(req) {
         notifiedUsers.add(result.id_user);
       }
 
-      // 3) Admin yang membuat (jika aktor adalah admin)
       if (canManageAll(actorRole) && actorId && !notifiedUsers.has(actorId)) {
         notifPromises.push(
           sendNotification(
@@ -609,7 +596,6 @@ export async function POST(req) {
         notifiedUsers.add(actorId);
       }
 
-      // 4) Approver chain
       if (Array.isArray(result.approvals) && result.approvals.length) {
         const approverIds = result.approvals.map((a) => a.approver_user_id).filter(Boolean);
 

@@ -561,19 +561,24 @@ export async function POST(req) {
           const taggedId = handoverUser?.id_user_tagged;
           if (!taggedId || notifiedUsers.has(taggedId)) continue;
           notifiedUsers.add(taggedId);
-          const overrideTitle = `${basePayload.nama_pemohon} mengajukan cuti`;
-          const overrideBody = `${basePayload.nama_pemohon} menandai Anda sebagai handover cuti (${basePayload.kategori_cuti}) pada ${basePayload.tanggal_cuti_display}.`;
+
+          // PERUBAHAN: Pesan spesifik untuk Handover (menambahkan isi handover ke body)
+          const handoverTitle = `${basePayload.nama_pemohon} menandai Anda`;
+          const handoverBody = `Anda ditunjuk sebagai handover oleh ${basePayload.nama_pemohon}. ${basePayload.handover || ''}`;
+
           notifPromises.push(
             sendNotification(
               'LEAVE_HANDOVER_TAGGED',
               taggedId,
               {
                 ...basePayload,
+                handover: basePayload.handover,
                 nama_penerima: handoverUser?.user?.nama_pengguna || undefined,
-                title: overrideTitle,
-                body: overrideBody,
-                overrideTitle,
-                overrideBody,
+                pesan_penerima: handoverBody, // Pesan spesifik
+                title: handoverTitle, // Title spesifik
+                body: handoverBody, // Body spesifik
+                overrideTitle: handoverTitle, // Override Title
+                overrideBody: handoverBody, // Override Body
               },
               { deeplink }
             )
