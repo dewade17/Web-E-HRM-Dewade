@@ -5,7 +5,20 @@ import { sendNotification } from '@/app/utils/services/notificationService';
 
 const DECISION_ALLOWED = new Set(['disetujui', 'ditolak']);
 const PENDING_DECISIONS = new Set(['pending']);
-const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
+
+// --- Helper Roles ---
+const SUPER_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
+
+function normalizeRole(role) {
+  return String(role || '')
+    .trim()
+    .toUpperCase();
+}
+
+function isSuperAdmin(role) {
+  return SUPER_ROLES.has(normalizeRole(role));
+}
+// --------------------
 
 const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
   day: '2-digit',
@@ -19,14 +32,10 @@ function normalizeDecision(val) {
   return DECISION_ALLOWED.has(s) ? s : null;
 }
 
-function normalizeRole(role) {
-  return String(role || '')
-    .trim()
-    .toUpperCase();
-}
-
 function canManageAll(role) {
-  return ADMIN_ROLES.has(normalizeRole(role));
+  // Fungsi ini digunakan di dalam handleDecision (opsional, tapi konsisten dengan file lama)
+  // Logic isSuperAdmin di atas sudah mencakup ini, tapi kita biarkan jika ada logic spesifik lain
+  return SUPER_ROLES.has(normalizeRole(role));
 }
 
 function toDateOnly(value) {
@@ -172,7 +181,7 @@ async function handleDecision(req, { params }) {
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth?.actor?.id;
-  const actorRole = auth?.actor?.role;
+  const actorRole = normalizeRole(auth?.actor?.role); // normalize di sini
   if (!actorId) {
     return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
   }
@@ -226,12 +235,12 @@ async function handleDecision(req, { params }) {
         throw NextResponse.json({ ok: false, message: 'Pengajuan tidak ditemukan.' }, { status: 404 });
       }
 
-      const normalizedActorRole = normalizeRole(actorRole);
+      // Validasi Akses: User Match ATAU Role Match ATAU Super Admin Bypass
       const matchesUser = approval.approver_user_id && approval.approver_user_id === actorId;
-      const matchesRole = approval.approver_role && normalizeRole(approval.approver_role) === normalizedActorRole;
-      const isAdmin = canManageAll(actorRole);
+      const matchesRole = approval.approver_role && normalizeRole(approval.approver_role) === actorRole;
+      const isAdminBypass = isSuperAdmin(actorRole);
 
-      if (!isAdmin && !matchesUser && !matchesRole) {
+      if (!matchesUser && !matchesRole && !isAdminBypass) {
         throw NextResponse.json({ ok: false, message: 'Anda tidak memiliki akses untuk approval ini.' }, { status: 403 });
       }
 
@@ -243,11 +252,14 @@ async function handleDecision(req, { params }) {
         decision,
         note,
         decided_at: new Date(),
+        // Catat siapa yang sebenarnya melakukan approval (audit trail untuk bypass)
         approver_user_id: actorId,
       };
 
-      if (!approval.approver_role && normalizedActorRole) {
-        updateData.approver_role = normalizedActorRole;
+      if (!approval.approver_role && actorRole) {
+        // Opsional: jika approver_role sebelumnya null, kita bisa set dengan role aktor
+        // Tapi hati-hati jika role aktor berbeda dari yang dimaksudkan flow
+        // updateData.approver_role = actorRole;
       }
 
       const updatedApproval = await tx.approvalIzinTukarHari.update({
@@ -272,12 +284,19 @@ async function handleDecision(req, { params }) {
       const { anyApproved, allRejected, highestApprovedLevel } = summarizeApprovalStatus(approvals);
 
       const parentUpdate = {};
+      const previousStatus = parent.status;
+
+      // Logic "Bebas": Jika ada SATU saja yang setuju, status parent jadi 'disetujui' (jika belum)
       if (anyApproved) {
-        parentUpdate.status = 'disetujui';
         parentUpdate.current_level = highestApprovedLevel;
+        if (previousStatus !== 'disetujui') {
+          parentUpdate.status = 'disetujui';
+        }
       } else if (allRejected) {
-        parentUpdate.status = 'ditolak';
         parentUpdate.current_level = null;
+        if (previousStatus !== 'ditolak') {
+          parentUpdate.status = 'ditolak';
+        }
       }
 
       let submission;
@@ -321,6 +340,8 @@ async function handleDecision(req, { params }) {
     });
 
     const { submission, approval, shiftSync } = result;
+
+    // Fetch full data untuk notifikasi
     const submissionFull = submission
       ? await db.izinTukarHari.findUnique({
           where: { id_izin_tukar_hari: submission.id_izin_tukar_hari },

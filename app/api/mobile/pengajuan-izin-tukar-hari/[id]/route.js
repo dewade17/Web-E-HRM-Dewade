@@ -378,7 +378,7 @@ export async function PUT(req, { params }) {
   }
 }
 
-/* ============================ DELETE (Soft delete) ============================ */
+/* ============================ DELETE (Hard delete) ============================ */
 export async function DELETE(req, { params }) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -408,13 +408,21 @@ export async function DELETE(req, { params }) {
       return NextResponse.json({ ok: false, message: 'Hanya pengajuan pending yang dapat dihapus.' }, { status: 409 });
     }
 
-    await db.izinTukarHari.update({
+    // Logic Change: Always hard delete (langsung hapus permanen)
+    await db.izinTukarHari.delete({
       where: { id_izin_tukar_hari: id },
-      data: { deleted_at: new Date() },
     });
 
-    return NextResponse.json({ ok: true, message: 'Pengajuan izin tukar hari dihapus.' });
+    return NextResponse.json({
+      ok: true,
+      message: 'Pengajuan izin tukar hari dihapus permanen.',
+      data: { id: existing.id_izin_tukar_hari, deleted: true },
+    });
   } catch (err) {
+    // Handle foreign key constraint errors
+    if (err?.code === 'P2003') {
+      return NextResponse.json({ ok: false, message: 'Gagal menghapus: Data ini masih direferensikan oleh data lain.' }, { status: 409 });
+    }
     console.error('DELETE /mobile/izin-tukar-hari/[id] error:', err);
     return NextResponse.json({ ok: false, message: 'Gagal menghapus pengajuan.' }, { status: 500 });
   }

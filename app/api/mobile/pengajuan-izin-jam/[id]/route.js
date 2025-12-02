@@ -441,22 +441,21 @@ export async function DELETE(req, { params }) {
       return NextResponse.json({ message: 'Forbidden.' }, { status: 403 });
     }
 
-    const { searchParams } = new URL(req.url);
-    const hard = searchParams.get('hard');
-
-    if (hard === '1' || hard === 'true') {
-      await db.pengajuanIzinJam.delete({ where: { id_pengajuan_izin_jam: pengajuan.id_pengajuan_izin_jam } });
-      return NextResponse.json({ message: 'Pengajuan izin jam dihapus permanen.', data: { id: pengajuan.id_pengajuan_izin_jam, deleted: true, hard: true } });
-    }
-
-    await db.pengajuanIzinJam.update({
+    // Logic Change: Always hard delete (langsung hapus permanen)
+    await db.pengajuanIzinJam.delete({
       where: { id_pengajuan_izin_jam: pengajuan.id_pengajuan_izin_jam },
-      data: { deleted_at: new Date() },
     });
 
-    return NextResponse.json({ message: 'Pengajuan izin jam berhasil dihapus.', data: { id: pengajuan.id_pengajuan_izin_jam, deleted: true, hard: false } });
+    return NextResponse.json({
+      message: 'Pengajuan izin jam berhasil dihapus permanen.',
+      data: { id: pengajuan.id_pengajuan_izin_jam, deleted: true },
+    });
   } catch (err) {
     if (err instanceof NextResponse) return err;
+    // Handle foreign key constraint errors
+    if (err?.code === 'P2003') {
+      return NextResponse.json({ message: 'Gagal menghapus: Data ini masih direferensikan oleh data lain.' }, { status: 409 });
+    }
     console.error('DELETE /mobile/pengajuan-izin-jam/:id error:', err);
     return NextResponse.json({ message: 'Server error.' }, { status: 500 });
   }

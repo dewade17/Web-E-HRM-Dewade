@@ -191,11 +191,6 @@ export async function DELETE(req, { params }) {
       return NextResponse.json({ ok: false, message: 'Forbidden.' }, { status: 403 });
     }
 
-    // Karena relasi di Prisma biasanya cascade (atau perlu dihapus manual jika tidak),
-    // pastikan `onDelete: Cascade` ada di schema.prisma untuk PengajuanCutiTanggal.
-    // Jika tidak, hapus manual dulu:
-    // await db.pengajuanCutiTanggal.deleteMany({ where: { id_pengajuan_cuti: id } });
-
     await db.pengajuanCuti.delete({
       where: { id_pengajuan_cuti: id },
     });

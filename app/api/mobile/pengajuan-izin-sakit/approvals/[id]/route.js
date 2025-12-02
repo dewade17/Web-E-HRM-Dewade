@@ -6,16 +6,24 @@ import { sendNotification } from '@/app/utils/services/notificationService';
 const DECISION_ALLOWED = new Set(['disetujui', 'ditolak']);
 const PENDING_DECISIONS = new Set(['pending']); // selaras Prisma
 
-function normalizeDecision(value) {
-  if (!value) return null;
-  const s = String(value).trim().toLowerCase();
-  return DECISION_ALLOWED.has(s) ? s : null;
-}
+// --- Helper Roles ---
+const SUPER_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
 
 function normalizeRole(role) {
   return String(role || '')
     .trim()
     .toUpperCase();
+}
+
+function isSuperAdmin(role) {
+  return SUPER_ROLES.has(normalizeRole(role));
+}
+// --------------------
+
+function normalizeDecision(value) {
+  if (!value) return null;
+  const s = String(value).trim().toLowerCase();
+  return DECISION_ALLOWED.has(s) ? s : null;
 }
 
 function buildInclude() {
@@ -49,7 +57,10 @@ function summarizeApprovalStatus(approvals) {
   const approved = approvals.filter((i) => i.decision === 'disetujui');
   const anyApproved = approved.length > 0;
   const allRejected = approvals.length > 0 && approvals.every((i) => i.decision === 'ditolak');
+
+  // Ambil level tertinggi yang sudah approve untuk tracking current_level
   const highestApprovedLevel = anyApproved ? approved.reduce((acc, c) => Math.max(acc, c.level), approved[0].level) : null;
+
   return { anyApproved, allRejected, highestApprovedLevel };
 }
 
@@ -91,9 +102,14 @@ async function handleDecision(req, { params }) {
         throw NextResponse.json({ message: 'Pengajuan tidak ditemukan.' }, { status: 404 });
       }
 
+      // Validasi Akses: User Match ATAU Role Match ATAU Super Admin Bypass
       const matchesUser = approvalRecord.approver_user_id && approvalRecord.approver_user_id === actorId;
       const matchesRole = approvalRecord.approver_role && normalizeRole(approvalRecord.approver_role) === actorRole;
-      if (!matchesUser && !matchesRole) throw NextResponse.json({ message: 'Anda tidak memiliki akses untuk approval ini.' }, { status: 403 });
+      const isAdminBypass = isSuperAdmin(actorRole);
+
+      if (!matchesUser && !matchesRole && !isAdminBypass) {
+        throw NextResponse.json({ message: 'Anda tidak memiliki akses untuk approval ini.' }, { status: 403 });
+      }
 
       if (!PENDING_DECISIONS.has(approvalRecord.decision)) {
         throw NextResponse.json({ message: 'Approval sudah memiliki keputusan.' }, { status: 409 });
@@ -101,7 +117,13 @@ async function handleDecision(req, { params }) {
 
       const updatedApproval = await tx.approvalIzinSakit.update({
         where: { id_approval_izin_sakit: id },
-        data: { decision, note, decided_at: new Date() },
+        data: {
+          decision,
+          note,
+          decided_at: new Date(),
+          // Catat siapa yang sebenarnya melakukan approval (berguna jika bypass admin)
+          approver_user_id: actorId,
+        },
         select: { id_approval_izin_sakit: true, id_pengajuan_izin_sakit: true, level: true, decision: true, note: true, decided_at: true },
       });
 
@@ -130,12 +152,19 @@ async function handleDecision(req, { params }) {
 
       const { anyApproved, allRejected, highestApprovedLevel } = summarizeApprovalStatus(approvals);
       const parentUpdate = {};
+      const previousStatus = approvalRecord.pengajuan_izin_sakit.status;
+
       if (anyApproved) {
-        parentUpdate.status = 'disetujui';
         parentUpdate.current_level = highestApprovedLevel;
+        // Logic Bebas: Jika ada 1 yang setuju, status parent jadi disetujui (jika belum)
+        if (previousStatus !== 'disetujui') {
+          parentUpdate.status = 'disetujui';
+        }
       } else if (allRejected) {
-        parentUpdate.status = 'ditolak';
         parentUpdate.current_level = null;
+        if (previousStatus !== 'ditolak') {
+          parentUpdate.status = 'ditolak';
+        }
       }
 
       const submission = Object.keys(parentUpdate).length
