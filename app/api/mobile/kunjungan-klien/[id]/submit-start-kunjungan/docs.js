@@ -48,7 +48,8 @@
  *               lampiran_kunjungan:
  *                 type: string
  *                 format: binary
- *                 description: Lampiran foto check-in (.jpg/.png). Nama field alternatif: lampiran, lampiran_file, lampiran_kunjungan_file, file.
+ *                 description: |
+ *                   Lampiran foto check-in (.jpg/.png). Nama field alternatif: lampiran, lampiran_file, lampiran_kunjungan_file, file.
  *     responses:
  *       '200':
  *         description: Check-in kunjungan berhasil diproses.

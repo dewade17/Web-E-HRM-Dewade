@@ -39,7 +39,7 @@
  *                 description: Kategori kunjungan yang dipilih saat selesai.
  *               recipients:
  *                 type: array
- *                 description: Daftar penerima laporan (alias field: report_recipients, kunjungan_report_recipients).
+ *                 description: "Daftar penerima laporan (alias field: report_recipients, kunjungan_report_recipients)."
  *                 items:
  *                   type: object
  *                   required: [id_user, recipient_nama_snapshot]
@@ -80,11 +80,11 @@
  *                 type: string
  *               recipients:
  *                 type: string
- *                 description: JSON array string daftar penerima laporan. Alias field: report_recipients, kunjungan_report_recipients.
+ *                 description: "JSON array string daftar penerima laporan. Alias field: report_recipients, kunjungan_report_recipients."
  *               lampiran_kunjungan:
  *                 type: string
  *                 format: binary
- *                 description: Lampiran foto check-out. Nama field alternatif: lampiran, lampiran_file, lampiran_kunjungan_file, file.
+ *                 description: "Lampiran foto check-out. Nama field alternatif: lampiran, lampiran_file, lampiran_kunjungan_file, file."
  *     responses:
  *       '200':
  *         description: Check-out kunjungan berhasil.
