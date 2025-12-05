@@ -1,10 +1,10 @@
 /**
  * @swagger
- * /api/mobile/pengajuan-izin-tukar-hari/approvals/{id}:
- *   put:
- *     summary: Beri keputusan approval tukar hari
- *     description: Mengambil keputusan menyetujui atau menolak pada level approval tertentu.
- *     tags: [Mobile - Pengajuan Izin Tukar Hari]
+ * /api/mobile/pengajuan-izin-sakit/approvals/{id}:
+ *   patch:
+ *     summary: Beri keputusan approval pengajuan izin sakit
+ *     description: Approver (berdasarkan user atau role) menyetujui atau menolak pengajuan.
+ *     tags: [Mobile - Pengajuan Izin Sakit]
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -27,20 +27,19 @@
  *               note:
  *                 type: string
  *                 nullable: true
- *               id_pola_kerja_pengganti:
- *                 type: string
- *                 nullable: true
  *     responses:
  *       '200':
- *         description: Keputusan berhasil disimpan dan status pengajuan diperbarui bila memenuhi level approval.
+ *         description: Keputusan approval berhasil disimpan.
  *       '400':
- *         description: Body keputusan tidak valid.
+ *         description: Data tidak valid atau approval sudah diproses.
  *       '401':
  *         description: Tidak terautentikasi.
  *       '403':
- *         description: Pengguna tidak memiliki akses untuk approval ini.
+ *         description: Tidak memiliki akses ke approval ini.
  *       '404':
  *         description: Approval atau pengajuan tidak ditemukan.
  *       '409':
- *         description: Approval sudah memiliki keputusan atau status pengajuan tidak sesuai.
+ *         description: Approval sudah memiliki keputusan.
+ *       '500':
+ *         description: Server error.
  */
