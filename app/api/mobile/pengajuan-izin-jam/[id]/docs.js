@@ -122,7 +122,7 @@
  *         description: Server error.
  *   delete:
  *     summary: Hapus pengajuan izin jam
- *     description: Soft delete secara default, gunakan query `hard=true` untuk hapus permanen.
+ *     description:  Menghapus permanen pengajuan izin jam. Hanya pemilik atau admin yang dapat menghapus.
  *     tags: [Mobile - Pengajuan Izin Jam]
  *     security:
  *       - BearerAuth: []

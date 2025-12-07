@@ -1,6 +1,39 @@
 /**
  * @swagger
  * /api/mobile/pengajuan-cuti/{id}:
+ *   get:
+ *     summary: Detail pengajuan cuti
+ *     description: Mengambil detail pengajuan cuti beserta daftar tanggal, approver, dan handover.
+ *     tags: [Mobile - Pengajuan Cuti]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID pengajuan cuti.
+ *     responses:
+ *       '200':
+ *         description: Data pengajuan cuti berhasil diambil.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 data:
+ *                   $ref: '#/components/schemas/MobilePengajuanCuti'
+ *       '401':
+ *         description: Tidak terautentikasi.
+ *       '403':
+ *         description: Pengguna tidak memiliki akses ke pengajuan.
+ *       '404':
+ *         description: Pengajuan tidak ditemukan.
+ *       '500':
+ *         description: Terjadi kesalahan saat mengambil pengajuan.
  *   put:
  *     summary: Perbarui pengajuan cuti
  *     description: Memperbarui detail pengajuan cuti milik pengguna, termasuk tanggal cuti, kategori, handover, dan lampiran.

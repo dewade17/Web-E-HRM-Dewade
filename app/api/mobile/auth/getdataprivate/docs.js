@@ -7,7 +7,7 @@
  *     tags:
  *       - Auth
  *     security:
- *       - bearerAuth: []
+ *       - BearerAuth: []
  *     responses:
  *       '200':
  *         description: Berhasil mengambil data user

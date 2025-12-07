@@ -15,6 +15,65 @@ function normalizeRole(role) {
 
 const isAdminRole = (role) => ADMIN_ROLES.has(normalizeRole(role));
 
+function mapPengajuanWithTanggal(item) {
+  if (!item) return item;
+
+  const dates = (item.tanggal_list || []).map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))).sort((a, b) => a.getTime() - b.getTime());
+
+  const tanggal_cuti_derived = dates.length ? dates[0] : null;
+  const tanggal_selesai_derived = dates.length ? dates[dates.length - 1] : null;
+
+  const { tanggal_list: _unused, ...rest } = item;
+
+  return {
+    ...rest,
+    tanggal_cuti: tanggal_cuti_derived,
+    tanggal_selesai: tanggal_selesai_derived,
+    tanggal_list: dates,
+  };
+}
+
+async function handleGet(req, { params }) {
+  const auth = await ensureAuth(req);
+  if (auth instanceof NextResponse) return auth;
+
+  const actorId = auth.actor?.id;
+  const actorRole = auth.actor?.role;
+
+  if (!actorId) {
+    return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
+  }
+
+  const { id } = params || {};
+  if (!id) {
+    return NextResponse.json({ ok: false, message: 'ID tidak valid.' }, { status: 400 });
+  }
+
+  try {
+    const pengajuan = await db.pengajuanCuti.findFirst({
+      where: { id_pengajuan_cuti: id, deleted_at: null, jenis_pengajuan: 'cuti' },
+      include: pengajuanInclude,
+    });
+
+    if (!pengajuan) {
+      return NextResponse.json({ ok: false, message: 'Pengajuan cuti tidak ditemukan.' }, { status: 404 });
+    }
+
+    if (pengajuan.id_user !== actorId && !isAdminRole(actorRole)) {
+      return NextResponse.json({ ok: false, message: 'Forbidden.' }, { status: 403 });
+    }
+
+    return NextResponse.json({ ok: true, data: mapPengajuanWithTanggal(pengajuan) });
+  } catch (err) {
+    console.error('GET /mobile/pengajuan-cuti/:id error:', err);
+    return NextResponse.json({ ok: false, message: 'Terjadi kesalahan saat mengambil pengajuan cuti.' }, { status: 500 });
+  }
+}
+
+export async function GET(req, ctx) {
+  return handleGet(req, ctx);
+}
+
 async function handleUpdate(req, { params }) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
