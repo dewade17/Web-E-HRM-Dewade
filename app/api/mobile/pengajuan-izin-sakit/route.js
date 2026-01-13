@@ -4,8 +4,8 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
-import { sendNotification } from '@/app/utils/services/notificationService';
-import storageClient from '@/app/api/_utils/storageClient';
+import { sendPengajuanIzinSakitEmailNotifications } from './_utils/emailNotifications';
+import { uploadMediaWithFallback } from '@/app/api/_utils/uploadWithFallback';
 import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 import { sendIzinSakitMessage, sendIzinSakitImage } from '@/app/utils/watzap/watzap';
@@ -13,7 +13,7 @@ import { sendIzinSakitMessage, sendIzinSakitImage } from '@/app/utils/watzap/wat
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
-const baseInclude = {
+export const baseInclude = {
   user: {
     select: {
       id_user: true,
@@ -46,19 +46,6 @@ const baseInclude = {
           email: true,
           role: true,
           foto_profil_user: true,
-          id_departement: true,
-          departement: {
-            select: {
-              id_departement: true,
-              nama_departement: true,
-            },
-          },
-          jabatan: {
-            select: {
-              id_jabatan: true,
-              nama_jabatan: true,
-            },
-          },
         },
       },
     },
@@ -87,122 +74,72 @@ const baseInclude = {
   },
 };
 
-const formatStatusDisplay = (status) => {
-  const s = String(status || 'pending').toLowerCase();
-  if (s === 'disetujui') return 'Disetujui';
-  if (s === 'ditolak') return 'Ditolak';
-  return 'Pending';
-};
-
 const normRole = (role) =>
   String(role || '')
     .trim()
     .toUpperCase();
+
 const canManageAll = (role) => ADMIN_ROLES.has(normRole(role));
 
 function isNullLike(value) {
   if (value === null || value === undefined) return true;
   if (typeof value === 'string') {
-    const t = value.trim().toLowerCase();
-    if (!t || t === 'null' || t === 'undefined') return true;
+    const v = value.trim().toLowerCase();
+    return v === '' || v === 'null' || v === 'undefined' || v === '-';
   }
   return false;
 }
 
-function normalizeLampiranInput(value) {
-  if (value === undefined) return undefined;
-  if (isNullLike(value)) return null;
-  return String(value).trim();
+function normalizeStatusInput(raw) {
+  if (raw === undefined || raw === null) return null;
+  const v = String(raw).trim().toLowerCase();
+  if (!v) return null;
+  if (!APPROVE_STATUSES.has(v)) return null;
+  return v;
 }
 
-function normalizeStatusInput(value) {
-  if (value === undefined || value === null) return null;
-  const s = String(value).trim().toLowerCase();
-  const mapped = s === 'menunggu' ? 'pending' : s;
-  return APPROVE_STATUSES.has(mapped) ? mapped : null;
+function normalizeLongTextInput(value) {
+  if (isNullLike(value)) return null;
+  return String(value);
+}
+
+function normalizeLampiranInput(value) {
+  if (isNullLike(value)) return null;
+  const s = String(value).trim();
+  return s ? s : null;
 }
 
 function cleanHandoverFormat(text) {
   if (!text) return '-';
-  return text.replace(/@\[(.*?)\]\((.*?)\)/g, (match, label, name) => {
+  return String(text).replace(/@\[(.*?)\]\((.*?)\)/g, (match, label, name) => {
     const cleanName = (name || label || '').replace(/^_+|_+$/g, '').trim();
     return `@${cleanName}`;
   });
 }
 
-async function ensureAuth(req) {
-  const auth = req.headers.get('authorization') || '';
-  if (auth.startsWith('Bearer ')) {
-    try {
-      const payload = verifyAuthToken(auth.slice(7));
-      const id = payload?.sub || payload?.id_user || payload?.userId;
-      if (id) return { actor: { id, role: payload?.role, source: 'bearer' } };
-    } catch {}
-  }
-  const sessionOrRes = await authenticateRequest();
-  if (sessionOrRes instanceof NextResponse) return sessionOrRes;
-  const id = sessionOrRes?.user?.id || sessionOrRes?.user?.id_user;
-  if (!id) return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
-  return { actor: { id, role: sessionOrRes?.user?.role, source: 'session', session: sessionOrRes } };
+function formatStatusDisplay(status) {
+  const v = String(status || '')
+    .trim()
+    .toLowerCase();
+  if (v === 'pending') return 'Menunggu';
+  if (v === 'disetujui') return 'Disetujui';
+  if (v === 'ditolak') return 'Ditolak';
+  return v || '-';
 }
 
-function normalizeApprovals(payload) {
-  if (!payload || typeof payload !== 'object') return undefined;
-  const rawApprovals = payload.approvals ?? payload['approvals[]'] ?? payload.approval ?? payload['approval[]'];
-  if (rawApprovals === undefined) return undefined;
-
-  const entries = Array.isArray(rawApprovals) ? rawApprovals : [rawApprovals];
-  const normalized = [];
-
-  for (let entry of entries) {
-    if (entry === undefined || entry === null) continue;
-    if (typeof entry === 'string') {
-      const t = entry.trim();
-      if (!t) continue;
-      try {
-        entry = JSON.parse(t);
-      } catch {
-        throw NextResponse.json({ message: 'Format approvals tidak valid. Gunakan JSON array.' }, { status: 400 });
-      }
-    }
-    if (!entry || typeof entry !== 'object') continue;
-
-    const level = Number(entry.level ?? entry.order ?? entry.sequence ?? entry.seq);
-    if (!Number.isFinite(level)) {
-      throw NextResponse.json({ message: 'Setiap approval harus memiliki level numerik.' }, { status: 400 });
-    }
-
-    const idRaw = entry.id_approval_izin_sakit ?? entry.id ?? entry.approval_id ?? entry.approvalId ?? null;
-
-    const approverUserRaw = entry.approver_user_id ?? entry.user_id ?? entry.id_user ?? entry.approverId ?? entry.userId;
-
-    const approverRoleRaw = entry.approver_role ?? entry.role ?? entry.role_code ?? entry.roleCode;
-
-    const approver_user_id = approverUserRaw == null ? null : String(approverUserRaw).trim();
-    const approver_role = approverRoleRaw == null ? null : normRole(approverRoleRaw);
-
-    if (!approver_user_id && !approver_role) continue;
-
-    normalized.push({
-      id: idRaw ? String(idRaw).trim() || null : null,
-      level,
-      approver_user_id: approver_user_id || null,
-      approver_role: approver_role || null,
-    });
-  }
-
-  normalized.sort((a, b) => a.level - b.level);
-  return normalized;
+function asArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value === null || value === undefined) return [];
+  return [value];
 }
 
-function parseTagUserIds(raw) {
-  if (raw === undefined) return undefined;
-  if (raw === null) return [];
-  const arr = Array.isArray(raw) ? raw : [raw];
+function dedupeStringList(values) {
   const set = new Set();
-  for (const v of arr) {
-    const s = String(v || '').trim();
-    if (s) set.add(s);
+  for (const entry of asArray(values)) {
+    if (entry === undefined || entry === null) continue;
+    const s = String(entry).trim();
+    if (!s) continue;
+    set.add(s);
   }
   return Array.from(set);
 }
@@ -220,6 +157,79 @@ async function validateTaggedUsers(userIds) {
   }
 }
 
+export function normalizeApprovals(payload) {
+  if (!payload) return null;
+  let raw = payload.approvals ?? payload.approval ?? null;
+  if (!raw) return null;
+
+  // Jika input adalah string (hasil jsonEncode dari Flutter)
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      // Jika hasil parse adalah array, langsung kembalikan
+      if (Array.isArray(parsed)) return parsed;
+      // Jika hasil parse adalah satu objek, bungkus dalam array
+      return [parsed];
+    } catch { return null; }
+  }
+
+  // Jika input sudah berupa Array (dari parseRequestBody)
+  if (Array.isArray(raw)) {
+    return raw.map(item => {
+      if (typeof item === 'string') {
+        try { return JSON.parse(item); } catch { return item; }
+      }
+      return item;
+    });
+  }
+  
+  return null;
+}
+
+export function parseTagUserIds(body) {
+  const raw = body?.tag_user_ids ?? body?.tagged_user_ids ?? body?.handover_user_ids ?? body?.handover_ids ?? body?.id_user_tagged;
+  if (Array.isArray(raw)) {
+    return raw.map((v) => String(v).trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    return raw
+      .split(',')
+      .map((v) => String(v).trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+export async function ensureAuth(req) {
+  const authHeader = req.headers.get('authorization') || req.headers.get('Authorization') || '';
+
+  // 1) Bearer token dulu
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    try {
+      const payload = verifyAuthToken(token);
+      const id = payload?.sub || payload?.id_user || payload?.userId || payload?.id;
+      const role = payload?.role;
+
+      if (id) return { actor: { id: String(id), role }, authType: 'bearer' };
+      // kalau id kosong, fallback session
+    } catch {
+      // fallback session di bawah
+    }
+  }
+
+  // 2) Fallback ke NextAuth session
+  const sessionOrRes = await authenticateRequest();
+  if (sessionOrRes instanceof NextResponse) return sessionOrRes;
+
+  const id = sessionOrRes?.user?.id || sessionOrRes?.user?.id_user;
+  const role = sessionOrRes?.user?.role;
+
+  if (!id) return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
+
+  return { actor: { id: String(id), role }, authType: 'session' };
+}
+
 export async function GET(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -234,59 +244,58 @@ export async function GET(req) {
     const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get('pageSize') || '20', 10)));
 
     const statusParam = searchParams.get('status');
-    const idUserFilter = searchParams.get('id_user');
-    const q = searchParams.get('q');
+    const userIdParam = searchParams.get('id_user');
+    const fromParam = searchParams.get('from');
+    const toParam = searchParams.get('to');
 
     const where = { deleted_at: null };
 
-    if (!canManageAll(actorRole)) where.id_user = actorId;
-    else if (idUserFilter) where.id_user = String(idUserFilter).trim();
+    if (!canManageAll(actorRole)) {
+      where.id_user = actorId;
+    } else if (userIdParam) {
+      where.id_user = userIdParam;
+    }
 
-    if (statusParam !== null && statusParam !== undefined && String(statusParam).trim() !== '') {
+    if (statusParam !== null && statusParam !== undefined && statusParam !== '') {
       const normalized = normalizeStatusInput(statusParam);
-      if (!normalized) {
-        return NextResponse.json({ message: 'Parameter status tidak valid.' }, { status: 400 });
-      }
+      if (!normalized) return NextResponse.json({ message: 'Parameter status tidak valid.' }, { status: 400 });
       where.status = normalized;
     }
 
     const and = [];
-    if (q) {
-      const keyword = String(q).trim();
-      if (keyword) {
-        and.push({
-          OR: [
-            { handover: { contains: keyword, mode: 'insensitive' } },
-            {
-              kategori: {
-                nama_kategori: { contains: keyword, mode: 'insensitive' },
-              },
-            },
-            {
-              user: {
-                nama_pengguna: { contains: keyword, mode: 'insensitive' },
-              },
-            },
-          ],
-        });
-      }
+    if (fromParam || toParam) {
+      const from = fromParam ? parseDateOnlyToUTC(fromParam) : null;
+      const to = toParam ? parseDateOnlyToUTC(toParam) : null;
+
+      if (fromParam && !from) return NextResponse.json({ message: 'Parameter from tidak valid (YYYY-MM-DD).' }, { status: 400 });
+      if (toParam && !to) return NextResponse.json({ message: 'Parameter to tidak valid (YYYY-MM-DD).' }, { status: 400 });
+
+      and.push({
+        tanggal_pengajuan: {
+          ...(from ? { gte: from } : {}),
+          ...(to ? { lte: to } : {}),
+        },
+      });
     }
+
     if (and.length) where.AND = and;
 
-    const [total, items] = await Promise.all([
+    const skip = (page - 1) * pageSize;
+
+    const [total, rows] = await Promise.all([
       db.pengajuanIzinSakit.count({ where }),
       db.pengajuanIzinSakit.findMany({
         where,
-        orderBy: [{ created_at: 'desc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
         include: baseInclude,
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: pageSize,
       }),
     ]);
 
     return NextResponse.json({
-      message: 'Data pengajuan izin sakit berhasil diambil.',
-      data: items,
+      ok: true,
+      data: rows,
       meta: {
         page,
         pageSize,
@@ -295,9 +304,8 @@ export async function GET(req) {
       },
     });
   } catch (err) {
-    if (err instanceof NextResponse) return err;
     console.error('GET /mobile/pengajuan-izin-sakit error:', err);
-    return NextResponse.json({ message: 'Server error.' }, { status: 500 });
+    return NextResponse.json({ ok: false, message: 'Server error.' }, { status: 500 });
   }
 }
 
@@ -312,6 +320,22 @@ export async function POST(req) {
   try {
     const parsed = await parseRequestBody(req);
     const body = parsed.body || {};
+
+    // 🔥 TAMBAHKAN LOG DI SINI
+    console.log('------------------------------------------------');
+    console.log('🚀 [DEBUG] POST Payload Received:');
+    console.log(JSON.stringify(body, null, 2)); // Menampilkan body dalam format rapi
+    
+    // Jika ingin melihat apakah ada file yang terdeteksi
+    const fileCheck = findFileInBody(parsed, ['lampiran', 'lampiran_izin_sakit', 'file', 'attachment']);
+    if (fileCheck) {
+        console.log('📂 [DEBUG] File detected:', fileCheck.name || 'Unnamed File', 'Size:', fileCheck.size);
+    } else {
+        console.log('📂 [DEBUG] No file uploaded.');
+    }
+    console.log('------------------------------------------------');
+    // 🔥 AKHIR LOG
+
     const approvalsInput = normalizeApprovals(body) ?? [];
 
     const rawTanggalPengajuan = body.tanggal_pengajuan;
@@ -323,91 +347,71 @@ export async function POST(req) {
     } else {
       const parsedTanggal = parseDateOnlyToUTC(rawTanggalPengajuan);
       if (!parsedTanggal) {
-        return NextResponse.json(
-          {
-            message: "Field 'tanggal_pengajuan' harus berupa tanggal valid (YYYY-MM-DD).",
-          },
-          { status: 400 }
-        );
+        return NextResponse.json({ message: 'tanggal_pengajuan tidak valid (YYYY-MM-DD).' }, { status: 400 });
       }
       tanggalPengajuan = parsedTanggal;
     }
 
-    const kategoriIdRaw = body.id_kategori_sakit ?? body.id_kategori ?? body.kategori;
-    const kategoriId = kategoriIdRaw ? String(kategoriIdRaw).trim() : '';
-    if (!kategoriId) {
-      return NextResponse.json({ message: "Field 'id_kategori_sakit' wajib diisi." }, { status: 400 });
-    }
+    const jenis_pengajuan = String(body.jenis_pengajuan || 'izin_sakit')
+      .trim()
+      .toLowerCase();
 
-    const targetUserId = canManageAll(actorRole) && body.id_user ? String(body.id_user).trim() : actorId;
-    if (!targetUserId) {
-      return NextResponse.json({ message: 'id_user tujuan tidak valid.' }, { status: 400 });
-    }
+    const idUserRaw = body.id_user;
+    const targetUserId = canManageAll(actorRole) && typeof idUserRaw === 'string' && idUserRaw.trim() ? idUserRaw.trim() : actorId;
 
-    const handover = isNullLike(body.handover) ? null : String(body.handover).trim();
+    const kategoriId = String(body.id_kategori_sakit || '').trim();
+    if (!kategoriId) return NextResponse.json({ message: 'id_kategori_sakit wajib diisi.' }, { status: 400 });
+
+    const handover = normalizeLongTextInput(body.handover);
+
+    const normalizedStatus = canManageAll(actorRole) ? normalizeStatusInput(body.status) || 'pending' : 'pending';
+
+    const file = findFileInBody(body, ['lampiran', 'lampiran_izin_sakit', 'file', 'attachment']);
 
     let uploadMeta = null;
-    let lampiranUrl = null;
-    const lampiranFile = findFileInBody(body, ['lampiran_izin_sakit', 'lampiran', 'lampiran_file', 'file', 'lampiran_izin']);
+    let lampiranUrl = normalizeLampiranInput(body.lampiran_izin_sakit_url);
 
-    if (lampiranFile) {
+    if (file) {
       try {
-        const res = await storageClient.uploadBufferWithPresign(lampiranFile, {
-          folder: 'pengajuan',
+        const uploaded = await uploadMediaWithFallback(file, {
+          folder: 'izin-sakit',
+          public: true,
         });
-        lampiranUrl = res.publicUrl || null;
+
+        lampiranUrl = uploaded.publicUrl || null;
+
         uploadMeta = {
-          key: res.key,
-          publicUrl: res.publicUrl,
-          etag: res.etag,
-          size: res.size,
+          provider: uploaded.provider,
+          publicUrl: uploaded.publicUrl || null,
+          key: uploaded.key,
+          etag: uploaded.etag,
+          size: uploaded.size,
+          bucket: uploaded.bucket,
+          path: uploaded.path,
+          fallbackFromStorageError: uploaded.errors?.storage || undefined,
         };
       } catch (e) {
-        return NextResponse.json(
-          {
-            message: 'Gagal mengunggah lampiran.',
-            detail: e?.message || String(e),
-          },
-          { status: 502 }
-        );
+        console.warn('POST /mobile/pengajuan-izin-sakit: upload failed:', e?.message || e);
       }
-    } else {
-      const fallback = normalizeLampiranInput(body.lampiran_izin_sakit_url ?? body.lampiran_url ?? body.lampiran ?? body.lampiran_izin);
-      lampiranUrl = fallback ?? null;
     }
 
-    const normalizedStatus = normalizeStatusInput(body.status ?? 'pending');
-    if (!normalizedStatus) {
-      return NextResponse.json({ message: 'status tidak valid.' }, { status: 400 });
+    const tagUserIdsRaw = body.tag_user_ids ?? body.tagged_user_ids ?? body.handover_user_ids ?? body.handover_ids ?? body.id_user_tagged;
+
+    let tagUserIds = [];
+    if (Array.isArray(tagUserIdsRaw)) {
+      tagUserIds = tagUserIdsRaw.map((v) => String(v).trim()).filter(Boolean);
+    } else if (typeof tagUserIdsRaw === 'string') {
+      tagUserIds = tagUserIdsRaw
+        .split(',')
+        .map((v) => String(v).trim())
+        .filter(Boolean);
     }
 
-    const currentLevel = body.current_level !== undefined ? Number(body.current_level) : null;
-    if (currentLevel !== null && !Number.isFinite(currentLevel)) {
-      return NextResponse.json({ message: 'current_level harus berupa angka.' }, { status: 400 });
+    if (tagUserIds.length) {
+      await validateTaggedUsers(tagUserIds);
     }
 
-    const jenis_pengajuan = 'sakit';
-
-    const tagUserIds = parseTagUserIds(body.tag_user_ids ?? body.handover_user_ids);
-    await validateTaggedUsers(tagUserIds);
-
-    const [targetUser, kategori] = await Promise.all([
-      db.user.findFirst({
-        where: { id_user: targetUserId, deleted_at: null },
-        select: { id_user: true, nama_pengguna: true },
-      }),
-      db.kategoriSakit.findFirst({
-        where: { id_kategori_sakit: kategoriId, deleted_at: null },
-        select: { id_kategori_sakit: true, nama_kategori: true },
-      }),
-    ]);
-
-    if (!targetUser) {
-      return NextResponse.json({ message: 'User tujuan tidak ditemukan.' }, { status: 404 });
-    }
-    if (!kategori) {
-      return NextResponse.json({ message: 'Kategori sakit tidak ditemukan.' }, { status: 404 });
-    }
+    const currentLevel = approvalsInput.length > 0 ? Math.min(...approvalsInput.map((a) => a.level).filter((v) => Number.isFinite(v))) : null;
 
     const result = await db.$transaction(async (tx) => {
       const created = await tx.pengajuanIzinSakit.create({
@@ -433,16 +437,14 @@ export async function POST(req) {
         });
       }
 
-      if (approvalsInput.length) {
+      if (approvalsInput && approvalsInput.length) {
         await tx.approvalIzinSakit.createMany({
-          data: approvalsInput.map((a) => ({
+          data: approvalsInput.map((approval) => ({
             id_pengajuan_izin_sakit: created.id_pengajuan_izin_sakit,
-            level: a.level,
-            approver_user_id: a.approver_user_id,
-            approver_role: a.approver_role,
+            level: approval.level,
+            approver_user_id: approval.approver_user_id,
+            approver_role: approval.approver_role,
             decision: 'pending',
-            decided_at: null,
-            note: null,
           })),
         });
       }
@@ -485,24 +487,15 @@ export async function POST(req) {
       };
 
       const overrideTitle = `${basePayload.nama_pemohon} mengajukan izin sakit`;
-      const overrideBody = tanggalPengajuanDisplay
-        ? `${basePayload.nama_pemohon} mengajukan izin sakit kategori ${basePayload.kategori_sakit} pada ${tanggalPengajuanDisplay}.`
-        : `${basePayload.nama_pemohon} mengajukan izin sakit kategori ${basePayload.kategori_sakit}.`;
-
-      const handoverTaggedNames = Array.isArray(result.handover_users)
-        ? result.handover_users
-            .map((h) => h?.user?.nama_pengguna)
-            .filter((name) => typeof name === 'string' && name.trim())
-            .map((name) => name.trim())
-        : [];
+      const overrideBody = tanggalPengajuanDisplay ? `Pengajuan izin sakit tanggal ${tanggalPengajuanDisplay} menunggu persetujuan.` : 'Pengajuan izin sakit menunggu persetujuan.';
 
       const whatsappPayloadLines = [
-        '*Pengajuan Izin Sakit*',
-        `Pemohon: ${basePayload.nama_pemohon}`,
-        `Kategori: ${basePayload.kategori_sakit}`,
-        `Handover: ${basePayload.handover}`,
-        `Handover Tag: ${handoverTaggedNames.length ? handoverTaggedNames.join(', ') : '-'}`,
-      ];
+        '📌 *Pengajuan Izin Sakit Baru*',
+        `👤 Pemohon: ${basePayload.nama_pemohon}`,
+        `🏷️ Kategori: ${basePayload.kategori_sakit}`,
+        basePayload.tanggal_pengajuan_display ? `📅 Tanggal: ${basePayload.tanggal_pengajuan_display}` : null,
+        basePayload.handover && basePayload.handover !== '-' ? `🤝 Handover: ${basePayload.handover}` : null,
+      ].filter(Boolean);
 
       const whatsappMessage = whatsappPayloadLines.join('\n');
       const finalLampiranUrl = result.lampiran_izin_sakit_url;
@@ -520,121 +513,11 @@ export async function POST(req) {
         console.error('[WA] Gagal mengirim notifikasi WhatsApp:', waError);
       }
 
-      const notifiedUsers = new Set();
-      const notifPromises = [];
-
-      if (Array.isArray(result.handover_users)) {
-        for (const h of result.handover_users) {
-          const taggedId = h?.id_user_tagged;
-          if (!taggedId || notifiedUsers.has(taggedId)) continue;
-          notifiedUsers.add(taggedId);
-
-          // --- PERBAIKAN UTAMA DI SINI ---
-          // Buat pesan spesifik untuk Handover
-          const handoverTitle = `${basePayload.nama_pemohon} menandai Anda`;
-          const handoverBody = `Anda ditunjuk sebagai handover oleh ${basePayload.nama_pemohon}. ${basePayload.handover}`;
-
-          notifPromises.push(
-            sendNotification(
-              'IZIN_SAKIT_HANDOVER_TAGGED',
-              taggedId,
-              {
-                ...basePayload,
-                handover: basePayload.handover,
-                nama_penerima: h?.user?.nama_pengguna || 'Rekan',
-                pesan_penerima: handoverBody,
-                title: handoverTitle, // Pakai pesan spesifik
-                body: handoverBody, // Pakai pesan spesifik
-                overrideTitle: handoverTitle, // Pakai pesan spesifik
-                overrideBody: handoverBody, // Pakai pesan spesifik
-              },
-              { deeplink }
-            )
-          );
-        }
+      try {
+        await sendPengajuanIzinSakitEmailNotifications(req, result);
+      } catch (emailErr) {
+        console.warn('POST /mobile/pengajuan-izin-sakit: email notification failed:', emailErr?.message || emailErr);
       }
-
-      if (result.id_user && !notifiedUsers.has(result.id_user)) {
-        notifPromises.push(
-          sendNotification(
-            'IZIN_SAKIT_HANDOVER_TAGGED',
-            result.id_user,
-            {
-              ...basePayload,
-              is_pemohon: true,
-              nama_penerima: basePayload.nama_pemohon || 'Rekan',
-              pesan_penerima: 'Pengajuan izin sakit Anda berhasil dikirim ke admin.',
-              title: overrideTitle,
-              body: overrideBody,
-              overrideTitle,
-              overrideBody,
-            },
-            { deeplink }
-          )
-        );
-        notifiedUsers.add(result.id_user);
-      }
-
-      if (canManageAll(actorRole) && actorId && !notifiedUsers.has(actorId)) {
-        notifPromises.push(
-          sendNotification(
-            'IZIN_SAKIT_HANDOVER_TAGGED',
-            actorId,
-            {
-              ...basePayload,
-              is_admin: true,
-              nama_penerima: 'Admin',
-              pesan_penerima: `Pengajuan izin sakit untuk ${basePayload.nama_pemohon} memerlukan tindak lanjut Anda.`,
-              title: overrideTitle,
-              body: overrideBody,
-              overrideTitle,
-              overrideBody,
-            },
-            { deeplink }
-          )
-        );
-        notifiedUsers.add(actorId);
-      }
-
-      if (Array.isArray(result.approvals) && result.approvals.length) {
-        const approverIds = result.approvals.map((a) => a.approver_user_id).filter(Boolean);
-
-        if (approverIds.length) {
-          const approvers = await db.user.findMany({
-            where: {
-              id_user: { in: approverIds },
-              deleted_at: null,
-            },
-            select: { id_user: true, nama_pengguna: true },
-          });
-
-          for (const approver of approvers) {
-            const uid = approver.id_user;
-            if (!uid || notifiedUsers.has(uid)) continue;
-            notifiedUsers.add(uid);
-
-            notifPromises.push(
-              sendNotification(
-                'IZIN_SAKIT_HANDOVER_TAGGED',
-                uid,
-                {
-                  ...basePayload,
-                  is_approver: true,
-                  nama_penerima: approver.nama_pengguna || 'Admin',
-                  pesan_penerima: `${basePayload.nama_pemohon} mengajukan izin sakit dan menunggu persetujuan Anda.`,
-                  title: overrideTitle,
-                  body: overrideBody,
-                  overrideTitle,
-                  overrideBody,
-                },
-                { deeplink }
-              )
-            );
-          }
-        }
-      }
-
-      if (notifPromises.length) await Promise.allSettled(notifPromises);
     }
 
     return NextResponse.json(
@@ -655,4 +538,123 @@ export async function POST(req) {
   }
 }
 
-export { ensureAuth, parseTagUserIds, baseInclude, normalizeApprovals };
+export async function PUT(req) {
+  const auth = await ensureAuth(req);
+  if (auth instanceof NextResponse) return auth;
+
+  const actorId = auth.actor?.id;
+  const actorRole = auth.actor?.role;
+  if (!actorId) return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
+
+  try {
+    const body = await req.json();
+    const id = body.id_pengajuan_izin_sakit || body.id || body.id_pengajuan;
+
+    if (!id) {
+      return NextResponse.json({ message: 'id_pengajuan_izin_sakit wajib diisi.' }, { status: 400 });
+    }
+
+    const existing = await db.pengajuanIzinSakit.findFirst({
+      where: { id_pengajuan_izin_sakit: id, deleted_at: null },
+      select: { id_pengajuan_izin_sakit: true, id_user: true },
+    });
+
+    if (!existing) {
+      return NextResponse.json({ message: 'Pengajuan tidak ditemukan.' }, { status: 404 });
+    }
+
+    if (!canManageAll(actorRole) && existing.id_user !== actorId) {
+      return NextResponse.json({ message: 'Forbidden.' }, { status: 403 });
+    }
+
+    const updateData = {};
+
+    if (hasOwn(body, 'id_kategori_sakit')) {
+      const kategoriId = isNullLike(body.id_kategori_sakit) ? null : String(body.id_kategori_sakit).trim();
+      if (!kategoriId) return NextResponse.json({ message: 'id_kategori_sakit tidak valid.' }, { status: 400 });
+      updateData.id_kategori_sakit = kategoriId;
+    }
+
+    if (hasOwn(body, 'handover')) {
+      updateData.handover = normalizeLongTextInput(body.handover);
+    }
+
+    if (hasOwn(body, 'tanggal_pengajuan')) {
+      if (body.tanggal_pengajuan === undefined) {
+      } else if (isNullLike(body.tanggal_pengajuan)) {
+        updateData.tanggal_pengajuan = null;
+      } else {
+        const parsedTanggal = parseDateOnlyToUTC(body.tanggal_pengajuan);
+        if (!parsedTanggal) {
+          return NextResponse.json({ message: 'tanggal_pengajuan tidak valid (YYYY-MM-DD).' }, { status: 400 });
+        }
+        updateData.tanggal_pengajuan = parsedTanggal;
+      }
+    }
+
+    if (canManageAll(actorRole) && hasOwn(body, 'status')) {
+      const normalized = normalizeStatusInput(body.status);
+      if (!normalized) return NextResponse.json({ message: 'status tidak valid.' }, { status: 400 });
+      updateData.status = normalized;
+    }
+
+    if (hasOwn(body, 'jenis_pengajuan')) {
+      const v = String(body.jenis_pengajuan || '')
+        .trim()
+        .toLowerCase();
+      if (v) updateData.jenis_pengajuan = v;
+    }
+
+    const updated = await db.pengajuanIzinSakit.update({
+      where: { id_pengajuan_izin_sakit: id },
+      data: updateData,
+      include: baseInclude,
+    });
+
+    return NextResponse.json({ ok: true, message: 'Pengajuan izin sakit berhasil diperbarui.', data: updated });
+  } catch (err) {
+    console.error('PUT /mobile/pengajuan-izin-sakit error:', err);
+    return NextResponse.json({ ok: false, message: 'Server error.' }, { status: 500 });
+  }
+}
+
+export async function DELETE(req) {
+  const auth = await ensureAuth(req);
+  if (auth instanceof NextResponse) return auth;
+
+  const actorId = auth.actor?.id;
+  const actorRole = auth.actor?.role;
+  if (!actorId) return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
+
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get('id_pengajuan_izin_sakit') || searchParams.get('id') || searchParams.get('id_pengajuan');
+
+    if (!id) {
+      return NextResponse.json({ message: 'id_pengajuan_izin_sakit wajib diisi.' }, { status: 400 });
+    }
+
+    const existing = await db.pengajuanIzinSakit.findFirst({
+      where: { id_pengajuan_izin_sakit: id, deleted_at: null },
+      select: { id_pengajuan_izin_sakit: true, id_user: true },
+    });
+
+    if (!existing) {
+      return NextResponse.json({ message: 'Pengajuan tidak ditemukan.' }, { status: 404 });
+    }
+
+    if (!canManageAll(actorRole) && existing.id_user !== actorId) {
+      return NextResponse.json({ message: 'Forbidden.' }, { status: 403 });
+    }
+
+    await db.pengajuanIzinSakit.update({
+      where: { id_pengajuan_izin_sakit: id },
+      data: { deleted_at: new Date() },
+    });
+
+    return NextResponse.json({ ok: true, message: 'Pengajuan izin sakit berhasil dihapus.' });
+  } catch (err) {
+    console.error('DELETE /mobile/pengajuan-izin-sakit error:', err);
+    return NextResponse.json({ ok: false, message: 'Server error.' }, { status: 500 });
+  }
+}

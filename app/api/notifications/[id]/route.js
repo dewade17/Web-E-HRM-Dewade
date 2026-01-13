@@ -13,7 +13,10 @@ export async function PUT(request, { params }) {
 
   const { id: notificationId } = params;
   if (!notificationId) {
-    return NextResponse.json({ message: 'Notification ID is required' }, { status: 400 });
+    return NextResponse.json(
+      { message: "Notification ID is required" },
+      { status: 400 }
+    );
   }
 
   try {
@@ -24,14 +27,17 @@ export async function PUT(request, { params }) {
         deleted_at: null,
       },
       data: {
-        status: 'read',
+        status: "read",
         read_at: new Date(),
         seen_at: new Date(),
       },
     });
 
     if (result.count === 0) {
-      return NextResponse.json({ message: 'Notification not found or access denied' }, { status: 404 });
+      return NextResponse.json(
+        { message: "Notification not found or access denied" },
+        { status: 404 }
+      );
     }
 
     const updated = await db.notification.findUnique({

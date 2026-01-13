@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
-import { ensureAdminAuth, guardHr } from '../_helpers';
+import { ensureAdminAuth, guardHr } from '../_helper';
 import { rolloverCutiKonfigurasi } from './rollover.mjs';
 
 export async function POST(req) {

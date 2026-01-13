@@ -1,7 +1,7 @@
 // app/api/admin/cuti-konfigurasi/route.js
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
-import { ensureAdminAuth, guardHr } from './_helpers';
+import { ensureAdminAuth, guardHr } from './_helper';
 const ALLOWED_MONTHS = new Set(['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER']);
 
 const ALLOWED_ORDER_BY = new Set(['created_at', 'updated_at', 'bulan', 'kouta_cuti', 'user']);

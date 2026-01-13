@@ -20,9 +20,12 @@ export async function GET(request) {
 
   try {
     const { searchParams } = new URL(request.url);
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
-    const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get('pageSize') || '20', 10)));
-    const status = (searchParams.get('status') || '').trim().toLowerCase();
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+    const pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(searchParams.get("pageSize") || "20", 10))
+    );
+    const status = (searchParams.get("status") || "").trim().toLowerCase();
 
     const where = { id_user: userId, deleted_at: null };
 
@@ -34,7 +37,7 @@ export async function GET(request) {
       db.notification.count({ where }),
       db.notification.findMany({
         where,
-        orderBy: { created_at: 'desc' },
+        orderBy: { created_at: "desc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
@@ -77,7 +80,10 @@ export async function POST(request) {
   const deviceIdentifier = sanitizeString(payload?.deviceIdentifier);
 
   if (!fcmToken) {
-    return NextResponse.json({ ok: false, message: 'Field "token" is required' }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, message: 'Field "token" is required' },
+      { status: 400 }
+    );
   }
 
   const now = new Date();

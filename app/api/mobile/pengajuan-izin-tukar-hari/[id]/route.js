@@ -1,8 +1,10 @@
+export const runtime = 'nodejs';
+
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { ensureAuth, izinInclude } from '../route';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
-import storageClient from '@/app/api/_utils/storageClient';
+import { uploadMediaWithFallback } from '@/app/api/_utils/uploadWithFallback';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
 
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
@@ -242,10 +244,23 @@ export async function PUT(req, { params }) {
     const lampiranFile = findFileInBody(body, ['lampiran_izin_tukar_hari', 'lampiran', 'lampiran_file', 'file']);
     if (lampiranFile) {
       try {
-        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'izin-tukar-hari' });
-        lampiranUrlUpdate = res.publicUrl || null;
+        const uploaded = await uploadMediaWithFallback(lampiranFile, {
+          storageFolder: 'izin-tukar-hari',
+          supabasePrefix: 'izin-tukar-hari',
+          pathSegments: [String(existing.id_user)],
+        });
+
+        lampiranUrlUpdate = uploaded.publicUrl || null;
       } catch (e) {
-        return NextResponse.json({ ok: false, message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+        return NextResponse.json(
+          {
+            ok: false,
+            message: 'Gagal mengunggah lampiran.',
+            detail: e?.message || String(e),
+            errors: e?.errors,
+          },
+          { status: e?.status || 502 }
+        );
       }
     }
 

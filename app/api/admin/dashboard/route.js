@@ -151,6 +151,8 @@ function buildCalendarEventsFromLeaves(leaves, year, monthIndex) {
   return eventsByDay;
 }
 
+
+
 // === Top 5 builder (tanpa perubahan logika) ===
 function buildTopRankings(attendanceRecords, shiftsByUser) {
   const metrics = new Map();
@@ -280,20 +282,37 @@ export async function GET(req) {
     const now = new Date();
 
     const divisionId = searchParams.get('divisionId') || null;
-    const calendarYear = parseInt(searchParams.get('calendarYear') || now.getFullYear(), 10);
-    const calendarMonth = parseInt(searchParams.get('calendarMonth') || now.getMonth(), 10);
+    const calendarYear = parseInt(
+      searchParams.get('calendarYear') || now.getFullYear(),
+      10
+    );
+    const calendarMonth = parseInt(
+      searchParams.get('calendarMonth') || now.getMonth(),
+      10
+    );
 
     const perfDateStr = searchParams.get('performanceDate');
-    const perfDivisionId = searchParams.get('performanceDivisionId') || null;
+    const perfDivisionId =
+      searchParams.get('performanceDivisionId') || null;
     const perfQuery = searchParams.get('performanceQuery') || '';
 
-    const performanceDate = perfDateStr ? toUtcStart(new Date(perfDateStr)) : toUtcStart(now);
+    const performanceDate = perfDateStr
+      ? toUtcStart(new Date(perfDateStr))
+      : toUtcStart(now);
 
     const todayEnd = toUtcEnd(now);
-    const chartRangeStart = toUtcStart(new Date(now.getTime() - 6 * ONE_DAY_MS));
-    const thisMonthStart = toUtcStart(new Date(now.getFullYear(), now.getMonth(), 1));
-    const lastMonthStart = toUtcStart(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-    const lastMonthEnd = toUtcEnd(new Date(now.getFullYear(), now.getMonth(), 0));
+    const chartRangeStart = toUtcStart(
+      new Date(now.getTime() - 6 * ONE_DAY_MS)
+    );
+    const thisMonthStart = toUtcStart(
+      new Date(now.getFullYear(), now.getMonth(), 1)
+    );
+    const lastMonthStart = toUtcStart(
+      new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    );
+    const lastMonthEnd = toUtcEnd(
+      new Date(now.getFullYear(), now.getMonth(), 0)
+    );
     const perfDateEnd = toUtcEnd(performanceDate);
 
     // range bulan untuk kalender di dashboard
@@ -519,11 +538,90 @@ export async function GET(req) {
           },
         },
       }),
+
+      // ====== CUTI UNTUK KALENDER (bulan yang sedang dilihat) ======
+      db.pengajuanCuti.findMany({
+        where: {
+          deleted_at: null,
+          status: 'disetujui',
+          ...(divisionId && {
+            user: { id_departement: divisionId },
+          }),
+          // ▶️ filter via relasi tanggal_list
+          tanggal_list: {
+            some: {
+              tanggal_cuti: {
+                gte: calendarMonthStart,
+                lte: calendarMonthEnd,
+              },
+            },
+          },
+        },
+        include: {
+          user: {
+            select: {
+              id_user: true,
+              nama_pengguna: true,
+              foto_profil_user: true,
+              departement: {
+                select: { nama_departement: true },
+              },
+            },
+          },
+          kategori_cuti: {
+            select: { nama_kategori: true },
+          },
+          // ▶️ kita perlu tanggal_list buat build event per hari
+          tanggal_list: {
+            select: { tanggal_cuti: true },
+          },
+        },
+      }),
+
+
+      // ====== CUTI HARI INI (untuk card "Karyawan Cuti") ======
+      db.pengajuanCuti.findMany({
+        where: {
+          deleted_at: null,
+          status: 'disetujui',
+          ...(divisionId && {
+            user: { id_departement: divisionId },
+          }),
+          tanggal_list: {
+            some: {
+              tanggal_cuti: {
+                gte: todayStart,
+                lte: todayEnd,
+              },
+            },
+          },
+        },
+        include: {
+          user: {
+            select: {
+              id_user: true,
+              nama_pengguna: true,
+              foto_profil_user: true,
+              departement: {
+                select: { nama_departement: true },
+              },
+            },
+          },
+          kategori_cuti: {
+            select: { nama_kategori: true },
+          },
+        },
+      }),
+
     ]);
 
     // shift untuk hitung telat
     const userIdSet = new Set();
-    [...topThisMonthAttendance, ...topLastMonthAttendance, ...performanceAttendance.map((p) => p.user)].forEach((rec) => {
+    [
+      ...topThisMonthAttendance,
+      ...topLastMonthAttendance,
+      ...performanceAttendance.map((p) => p.user),
+    ].forEach((rec) => {
       if (rec?.id_user) userIdSet.add(rec.id_user);
     });
 
@@ -551,7 +649,9 @@ export async function GET(req) {
     });
 
     // mini bars per divisi
-    const departementNameMap = new Map(divisions.map((d) => [d.id_departement, d.nama_departement]));
+    const departementNameMap = new Map(
+      divisions.map((d) => [d.id_departement, d.nama_departement])
+    );
     const miniBars = miniBarRaw.map((item) => ({
       label: departementNameMap.get(item.id_departement) || 'Lainnya',
       value: item._count.id_user,
@@ -560,7 +660,9 @@ export async function GET(req) {
     // CHART (7 hari): jumlah jam_masuk / jam_pulang
     const chartDayBuckets = new Map();
     for (let i = 0; i < 7; i++) {
-      const date = new Date(chartRangeStart.getTime() + i * ONE_DAY_MS);
+      const date = new Date(
+        chartRangeStart.getTime() + i * ONE_DAY_MS
+      );
       chartDayBuckets.set(date.toISOString().slice(0, 10), {
         name: DAY_LABELS[date.getUTCDay()],
         Kedatangan: 0,
@@ -577,8 +679,14 @@ export async function GET(req) {
     const chartData = Array.from(chartDayBuckets.values());
 
     // Top 5
-    const top5ThisMonth = buildTopRankings(topThisMonthAttendance, shiftsByUser);
-    const top5LastMonth = buildTopRankings(topLastMonthAttendance, shiftsByUser);
+    const top5ThisMonth = buildTopRankings(
+      topThisMonthAttendance,
+      shiftsByUser
+    );
+    const top5LastMonth = buildTopRankings(
+      topLastMonthAttendance,
+      shiftsByUser
+    );
 
     // Performance rows
     const perfRowsAll = buildPerformanceRows({
@@ -653,13 +761,22 @@ export async function GET(req) {
       },
 
       perfTabs: PERFORMANCE_TABS,
-      perfDivisionOptions: [{ label: '--Semua Divisi--', value: '' }, ...divisionOptions],
+      perfDivisionOptions: [
+        { label: '--Semua Divisi--', value: '' },
+        ...divisionOptions,
+      ],
       perfDate: performanceDate.toISOString(),
       perfRows,
     });
   } catch (err) {
     console.error('GET /api/admin/dashboard error:', err);
-    const errorMessage = process.env.NODE_ENV === 'development' ? err.message : 'Terjadi kesalahan pada server.';
-    return NextResponse.json({ message: errorMessage }, { status: 500 });
+    const errorMessage =
+      process.env.NODE_ENV === 'development'
+        ? err.message
+        : 'Terjadi kesalahan pada server.';
+    return NextResponse.json(
+      { message: errorMessage },
+      { status: 500 }
+    );
   }
 }

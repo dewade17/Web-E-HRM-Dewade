@@ -5,19 +5,16 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
-import { sendNotification } from '@/app/utils/services/notificationService';
-import storageClient from '@/app/api/_utils/storageClient';
+import { uploadMediaWithFallback } from '@/app/api/_utils/uploadWithFallback';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from './_utils/approvals';
+import { sendPengajuanCutiEmailNotifications } from './_utils/emailNotifications';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 
 const MONTH_ENUM = ['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'];
 
-/**
- * Relasi yang di-include.
- */
 export const pengajuanInclude = {
   user: {
     select: {
@@ -45,6 +42,7 @@ export const pengajuanInclude = {
     select: {
       id_kategori_cuti: true,
       nama_kategori: true,
+      pengurangan_kouta: true,
     },
   },
   handover_users: {
@@ -78,6 +76,7 @@ export const pengajuanInclude = {
     orderBy: { level: 'asc' },
     select: {
       id_approval_pengajuan_cuti: true,
+      id_pengajuan_cuti: true,
       level: true,
       approver_user_id: true,
       approver_role: true,
@@ -95,35 +94,37 @@ export const pengajuanInclude = {
       },
     },
   },
-  // daftar tanggal cuti
   tanggal_list: {
+    orderBy: { tanggal_cuti: 'asc' },
     select: {
+      id_pengajuan_cuti_tanggal: true,
       tanggal_cuti: true,
     },
-    orderBy: { tanggal_cuti: 'asc' },
   },
 };
 
-const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
-  day: '2-digit',
-  month: 'long',
+const dateIsoFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'UTC',
   year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
 });
 
-const normRole = (role) =>
-  String(role || '')
-    .trim()
-    .toUpperCase();
-const canManageAll = (role) => ADMIN_ROLES.has(normRole(role));
+const dateDisplayFormatter = new Intl.DateTimeFormat('id-ID', {
+  timeZone: 'UTC',
+  year: 'numeric',
+  month: 'long',
+  day: '2-digit',
+});
 
 function formatDateISO(value) {
-  if (!value) return '-';
+  if (!value) return null;
   try {
     const asDate = new Date(value);
-    if (Number.isNaN(asDate.getTime())) return '-';
-    return asDate.toISOString().split('T')[0];
+    if (Number.isNaN(asDate.getTime())) return null;
+    return dateIsoFormatter.format(asDate);
   } catch (_) {
-    return '-';
+    return null;
   }
 }
 
@@ -139,89 +140,148 @@ function formatDateDisplay(value) {
 }
 
 export async function ensureAuth(req) {
-  const auth = req.headers.get('authorization') || '';
-  if (auth.startsWith('Bearer ')) {
+  const authHeader = req.headers.get('authorization') || req.headers.get('Authorization') || '';
+
+  // 1) Bearer token dulu
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
     try {
-      const payload = verifyAuthToken(auth.slice(7).trim());
+      const payload = verifyAuthToken(token);
       const id = payload?.sub || payload?.id_user || payload?.userId || payload?.id;
+
       if (id) {
         return {
           actor: {
-            id,
+            id: String(id),
             role: payload?.role,
             source: 'bearer',
           },
+          authType: 'bearer',
         };
       }
-    } catch (_) {
-      /* fallback ke NextAuth */
+      // kalau payload valid tapi id kosong, lanjut fallback session
+    } catch {
+      // fallback session di bawah
     }
   }
 
+  // 2) Fallback ke NextAuth session
   const sessionOrRes = await authenticateRequest();
   if (sessionOrRes instanceof NextResponse) return sessionOrRes;
 
-  const id = sessionOrRes?.user?.id || sessionOrRes?.user?.id_user;
+  const user = sessionOrRes?.user;
+  const id = user?.id || user?.id_user; // NextAuth: id, beberapa tempat lama: id_user
+  const role = user?.role;
+
   if (!id) {
     return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
   }
 
   return {
     actor: {
-      id,
-      role: sessionOrRes?.user?.role,
+      id: String(id),
+      role,
       source: 'session',
     },
+    authType: 'session',
+    session: sessionOrRes,
   };
 }
 
-/**
- * Normalisasi status: tidak ada lagi 'menunggu' (legacy dihapus).
- */
-export function normalizeStatus(value) {
-  if (!value) return null;
-  const raw = String(value).trim().toLowerCase();
-  return APPROVE_STATUSES.has(raw) ? raw : null;
-}
-
-export function parseDateQuery(value) {
+function normalizeStatus(value) {
   if (value === null || value === undefined) return null;
-  const trimmed = String(value).trim();
-  if (!trimmed) return null;
-  return parseDateOnlyToUTC(trimmed);
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'menunggu') return null;
+  if (APPROVE_STATUSES.has(normalized)) return normalized;
+  return null;
 }
 
-export function sanitizeHandoverIds(ids) {
-  if (ids === undefined) return undefined;
-  if (typeof ids === 'string' && ids.trim() === '[]') return [];
-  const arr = Array.isArray(ids) ? ids : [ids];
-  const unique = new Set();
-  for (const raw of arr) {
-    const val = String(raw || '').trim();
-    if (!val) continue;
-    unique.add(val);
+function parseDateQuery(value) {
+  if (!value) return null;
+  const asDate = parseDateOnlyToUTC(value);
+  return asDate || null;
+}
+
+function sanitizeHandoverIds(input) {
+  if (input === undefined) return undefined;
+  if (input === null || input === '' || input === '[]') return [];
+
+  let rawArr = [];
+
+  // Jika input berupa string, coba parse jika itu JSON array atau split jika koma
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        rawArr = JSON.parse(trimmed);
+      } catch (e) {
+        rawArr = [trimmed]; // Gagal parse, anggap satu string biasa
+      }
+    } else if (trimmed.includes(',')) {
+      rawArr = trimmed.split(',').map(v => v.trim());
+    } else {
+      rawArr = [trimmed];
+    }
+  } else if (Array.isArray(input)) {
+    rawArr = input;
+  } else {
+    rawArr = [input];
   }
-  return Array.from(unique);
+
+  const ids = rawArr
+    .flatMap((v) => {
+      if (v === undefined || v === null) return [];
+      if (Array.isArray(v)) return v;
+      return [v];
+    })
+    .map((v) => String(v).trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(ids));
 }
 
-export function summarizeDatesByMonth(dates) {
-  if (!Array.isArray(dates) || dates.length === 0) return [];
-  const seenKeys = new Set();
-  const monthCounts = new Map();
-  for (const item of dates) {
-    const date = item instanceof Date ? item : item ? new Date(item) : null;
-    if (!(date instanceof Date) || Number.isNaN(date.getTime())) continue;
-    const isoKey = date.toISOString().slice(0, 10);
-    if (seenKeys.has(isoKey)) continue;
-    seenKeys.add(isoKey);
-    const monthName = MONTH_ENUM[date.getUTCMonth()];
-    if (!monthName) continue;
-    monthCounts.set(monthName, (monthCounts.get(monthName) || 0) + 1);
+export function summarizeDatesByMonth(dateList) {
+  const groups = new Map();
+  for (const dateVal of dateList || []) {
+    const d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+    if (Number.isNaN(d.getTime())) continue;
+
+    const year = d.getUTCFullYear();
+    const monthIndex = d.getUTCMonth();
+    const key = `${year}-${monthIndex}`;
+    const arr = groups.get(key) || [];
+    arr.push(d);
+    groups.set(key, arr);
   }
-  return Array.from(monthCounts.entries());
+
+  const results = [];
+  for (const [key, list] of groups.entries()) {
+    list.sort((a, b) => a.getTime() - b.getTime());
+    const [yearStr, monthIndexStr] = key.split('-');
+    const year = Number(yearStr);
+    const monthIndex = Number(monthIndexStr);
+    const monthName = MONTH_ENUM[monthIndex] || `Bulan-${monthIndex + 1}`;
+    results.push({
+      key,
+      year,
+      monthIndex,
+      monthName,
+      totalDays: list.length,
+      firstDate: list[0],
+      lastDate: list[list.length - 1],
+      dates: list,
+    });
+  }
+
+  results.sort((a, b) => {
+    if (a.year !== b.year) return a.year - b.year;
+    return a.monthIndex - b.monthIndex;
+  });
+
+  return results;
 }
 
-/* ============================ GET (List) ============================ */
 export async function GET(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -238,122 +298,135 @@ export async function GET(req) {
     const perPageBase = Number.isNaN(perPageRaw) || perPageRaw < 1 ? 20 : perPageRaw;
     const perPage = Math.min(Math.max(perPageBase, 1), 100);
 
+    const search = (searchParams.get('search') || '').trim();
     const statusParam = searchParams.get('status');
     const status = normalizeStatus(statusParam);
-    if (statusParam && !status) {
-      return NextResponse.json({ ok: false, message: 'Parameter status tidak valid.' }, { status: 400 });
-    }
 
+    const isAdmin = actorRole && ADMIN_ROLES.has(String(actorRole).toUpperCase());
+    const targetUserFilter = (searchParams.get('id_user') || '').trim();
     const kategoriId = (searchParams.get('id_kategori_cuti') || '').trim();
 
-    // Parameter tanggal (rename: tanggal_mulai* -> tanggal_cuti*)
-    const tanggalCutiEqParam = searchParams.get('tanggal_cuti') ?? searchParams.get('tanggal_mulai');
-    const tanggalCutiFromParam = searchParams.get('tanggal_cuti_from') ?? searchParams.get('tanggal_mulai_from');
-    const tanggalCutiToParam = searchParams.get('tanggal_cuti_to') ?? searchParams.get('tanggal_mulai_to');
+    const tanggalCutiEqParam = (searchParams.get('tanggal_cuti') || searchParams.get('tanggal_mulai') || '').trim();
+    const tanggalCutiStartParam = (searchParams.get('start_date') || '').trim();
+    const tanggalCutiEndParam = (searchParams.get('end_date') || '').trim();
 
-    // Filter field tunggal 'tanggal_masuk_kerja'
-    const tanggalMasukEqParam = searchParams.get('tanggal_masuk_kerja');
-    const tanggalMasukFromParam = searchParams.get('tanggal_masuk_kerja_from');
-    const tanggalMasukToParam = searchParams.get('tanggal_masuk_kerja_to');
+    const tanggalMasukEqParam = (searchParams.get('tanggal_masuk_kerja') || '').trim();
+    const tanggalMasukStartParam = (searchParams.get('tanggal_masuk_start') || '').trim();
+    const tanggalMasukEndParam = (searchParams.get('tanggal_masuk_end') || '').trim();
 
-    const targetUserParam = searchParams.get('id_user');
-    const targetUserFilter = targetUserParam ? String(targetUserParam).trim() : '';
+    const where = { deleted_at: null };
 
-    const where = { deleted_at: null, jenis_pengajuan: 'cuti' };
-
-    if (!canManageAll(actorRole)) {
+    if (!isAdmin) {
       where.id_user = actorId;
     } else if (targetUserFilter) {
       where.id_user = targetUserFilter;
     }
 
     if (status) {
-      // ❌ tak ada lagi 'menunggu'
-      where.status = status; // 'pending' | 'disetujui' | 'ditolak'
+      where.status = status;
     }
 
     if (kategoriId) where.id_kategori_cuti = kategoriId;
 
-    // Filter tanggal_cuti via relasi tanggal_list
     if (tanggalCutiEqParam) {
       const parsed = parseDateQuery(tanggalCutiEqParam);
-      if (!parsed) {
-        return NextResponse.json({ ok: false, message: 'Parameter tanggal_cuti tidak valid.' }, { status: 400 });
-      }
-      where.tanggal_list = { some: { tanggal_cuti: parsed } };
-    } else if (tanggalCutiFromParam || tanggalCutiToParam) {
-      const gte = parseDateQuery(tanggalCutiFromParam);
-      const lte = parseDateQuery(tanggalCutiToParam);
-      if (tanggalCutiFromParam && !gte) {
-        return NextResponse.json({ ok: false, message: 'Parameter tanggal_cuti_from tidak valid.' }, { status: 400 });
-      }
-      if (tanggalCutiToParam && !lte) {
-        return NextResponse.json({ ok: false, message: 'Parameter tanggal_cuti_to tidak valid.' }, { status: 400 });
-      }
-      where.tanggal_list = {
-        some: {
-          tanggal_cuti: {
-            ...(gte ? { gte } : {}),
-            ...(lte ? { lte } : {}),
+      if (parsed) {
+        const start = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate(), 0, 0, 0));
+        const end = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate(), 23, 59, 59, 999));
+        where.tanggal_list = {
+          some: {
+            tanggal_cuti: {
+              gte: start,
+              lte: end,
+            },
           },
-        },
-      };
+        };
+      }
+    } else if (tanggalCutiStartParam || tanggalCutiEndParam) {
+      const gte = parseDateQuery(tanggalCutiStartParam);
+      const lte = parseDateQuery(tanggalCutiEndParam);
+      if (gte || lte) {
+        const start = gte ? new Date(Date.UTC(gte.getUTCFullYear(), gte.getUTCMonth(), gte.getUTCDate(), 0, 0, 0)) : undefined;
+        const end = lte ? new Date(Date.UTC(lte.getUTCFullYear(), lte.getUTCMonth(), lte.getUTCDate(), 23, 59, 59, 999)) : undefined;
+        where.tanggal_list = {
+          some: {
+            tanggal_cuti: {
+              ...(start ? { gte: start } : {}),
+              ...(end ? { lte: end } : {}),
+            },
+          },
+        };
+      }
     }
 
-    // Filter 'tanggal_masuk_kerja'
     if (tanggalMasukEqParam) {
       const parsed = parseDateQuery(tanggalMasukEqParam);
-      if (!parsed) {
-        return NextResponse.json({ ok: false, message: 'Parameter tanggal_masuk_kerja tidak valid.' }, { status: 400 });
+      if (parsed) {
+        const start = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate(), 0, 0, 0));
+        const end = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate(), 23, 59, 59, 999));
+        where.tanggal_masuk_kerja = { gte: start, lte: end };
       }
-      where.tanggal_masuk_kerja = parsed;
-    } else if (tanggalMasukFromParam || tanggalMasukToParam) {
-      const gteMasuk = parseDateQuery(tanggalMasukFromParam);
-      const lteMasuk = parseDateQuery(tanggalMasukToParam);
-      if (tanggalMasukFromParam && !gteMasuk) {
-        return NextResponse.json({ ok: false, message: 'Parameter tanggal_masuk_kerja_from tidak valid.' }, { status: 400 });
+    } else if (tanggalMasukStartParam || tanggalMasukEndParam) {
+      const gteMasuk = parseDateQuery(tanggalMasukStartParam);
+      const lteMasuk = parseDateQuery(tanggalMasukEndParam);
+      if (gteMasuk || lteMasuk) {
+        const start = gteMasuk ? new Date(Date.UTC(gteMasuk.getUTCFullYear(), gteMasuk.getUTCMonth(), gteMasuk.getUTCDate(), 0, 0, 0)) : undefined;
+        const end = lteMasuk ? new Date(Date.UTC(lteMasuk.getUTCFullYear(), lteMasuk.getUTCMonth(), lteMasuk.getUTCDate(), 23, 59, 59, 999)) : undefined;
+        where.tanggal_masuk_kerja = {
+          ...(start ? { gte: start } : {}),
+          ...(end ? { lte: end } : {}),
+        };
       }
-      if (tanggalMasukToParam && !lteMasuk) {
-        return NextResponse.json({ ok: false, message: 'Parameter tanggal_masuk_kerja_to tidak valid.' }, { status: 400 });
-      }
-      where.tanggal_masuk_kerja = {
-        ...(gteMasuk ? { gte: gteMasuk } : {}),
-        ...(lteMasuk ? { lte: lteMasuk } : {}),
-      };
     }
 
-    const [total, rawItems] = await Promise.all([
+    if (search) {
+      where.OR = [{ user: { nama_pengguna: { contains: search } } }, { user: { email: { contains: search } } }, { keperluan: { contains: search } }, { kategori_cuti: { nama_kategori: { contains: search } } }];
+    }
+
+    const [total, items] = await Promise.all([
       db.pengajuanCuti.count({ where }),
       db.pengajuanCuti.findMany({
         where,
-        orderBy: [{ created_at: 'desc' }],
+        orderBy: { created_at: 'desc' },
         skip: (page - 1) * perPage,
         take: perPage,
         include: pengajuanInclude,
       }),
     ]);
 
-    // Transformasi: kirim tanggal_cuti (awal turunan), tanggal_selesai (akhir turunan)
-    const items = rawItems.map((item) => {
-      const dates = (item.tanggal_list || []).map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))).sort((a, b) => a.getTime() - b.getTime());
+    const normalizedItems = (items || []).map((item) => {
+      const dates = (item?.tanggal_list || []).map((d) => d?.tanggal_cuti).filter(Boolean);
+      const summary = summarizeDatesByMonth(dates);
+      const totalDays = summary.reduce((acc, s) => acc + (s.totalDays || 0), 0);
 
-      const tanggal_cuti_derived = dates.length ? dates[0] : null;
-      const tanggal_selesai_derived = dates.length ? dates[dates.length - 1] : null;
+      const tanggalMulai = summary.length ? summary[0]?.firstDate : null;
+      const tanggalSelesai = summary.length ? summary[summary.length - 1]?.lastDate : null;
 
       const { tanggal_list: _unused, ...rest } = item;
 
       return {
         ...rest,
-        tanggal_cuti: tanggal_cuti_derived,
-        tanggal_selesai: tanggal_selesai_derived,
-        tanggal_list: dates,
+        tanggal_cuti: formatDateISO(tanggalMulai),
+        tanggal_selesai: formatDateISO(tanggalSelesai),
+        tanggal_cuti_display: formatDateDisplay(tanggalMulai),
+        tanggal_selesai_display: formatDateDisplay(tanggalSelesai),
+        summary_dates: summary.map((s) => ({
+          year: s.year,
+          monthIndex: s.monthIndex,
+          monthName: s.monthName,
+          totalDays: s.totalDays,
+          firstDate: formatDateISO(s.firstDate),
+          lastDate: formatDateISO(s.lastDate),
+        })),
+        total_days: totalDays,
+        tanggal_list: item?.tanggal_list || [],
       };
     });
 
     return NextResponse.json({
       ok: true,
-      data: items,
-      meta: {
+      data: normalizedItems,
+      pagination: {
         page,
         perPage,
         total,
@@ -362,11 +435,10 @@ export async function GET(req) {
     });
   } catch (err) {
     console.error('GET /mobile/pengajuan-cuti error:', err);
-    return NextResponse.json({ ok: false, message: 'Gagal mengambil data pengajuan cuti.' }, { status: 500 });
+    return NextResponse.json({ ok: false, message: 'Gagal memuat pengajuan cuti.' }, { status: 500 });
   }
 }
 
-/* ============================ POST (Create) ============================ */
 export async function POST(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
@@ -383,17 +455,13 @@ export async function POST(req) {
     const status = err?.status || 400;
     return NextResponse.json({ ok: false, message: err?.message || 'Body request tidak valid.' }, { status });
   }
+
   const body = parsed.body || {};
 
   try {
     const id_kategori_cuti = String(body?.id_kategori_cuti || '').trim();
 
-    // Input: tanggal_cuti[] (prefer) / legacy tanggal_mulai[]
-    const tanggalCutiInput =
-      body?.['tanggal_cuti[]'] ??
-      body?.tanggal_cuti ??
-      body?.['tanggal_mulai[]'] ?? // legacy
-      body?.tanggal_mulai; // legacy
+    const tanggalCutiInput = body?.['tanggal_cuti[]'] ?? body?.tanggal_cuti ?? body?.['tanggal_mulai[]'] ?? body?.tanggal_mulai;
 
     const tanggalMasukInput = body?.tanggal_masuk_kerja;
 
@@ -406,16 +474,19 @@ export async function POST(req) {
       return NextResponse.json({ ok: false, message: 'id_kategori_cuti wajib diisi.' }, { status: 400 });
     }
 
-    // tanggal_masuk_kerja harus single
-    if (Array.isArray(tanggalMasukInput)) {
-      return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja harus berupa satu tanggal, bukan array.' }, { status: 400 });
-    }
-    const tanggalMasukKerja = parseDateOnlyToUTC(tanggalMasukInput);
-    if (!tanggalMasukKerja) {
-      return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja tidak valid.' }, { status: 400 });
+    const kategori = await db.kategoriCuti.findFirst({
+      where: { id_kategori_cuti, deleted_at: null },
+      select: { id_kategori_cuti: true, pengurangan_kouta: true },
+    });
+    if (!kategori) {
+      return NextResponse.json({ ok: false, message: 'Kategori cuti tidak ditemukan.' }, { status: 404 });
     }
 
-    // tanggal_cuti[]
+    const tanggalMasukKerja = parseDateOnlyToUTC(tanggalMasukInput);
+    if (!tanggalMasukKerja) {
+      return NextResponse.json({ ok: false, message: 'tanggal_masuk_kerja wajib diisi dan harus valid.' }, { status: 400 });
+    }
+
     const tanggalCutiArray = Array.isArray(tanggalCutiInput) ? tanggalCutiInput : [tanggalCutiInput];
     const parsedCutiDates = [];
 
@@ -434,31 +505,36 @@ export async function POST(req) {
       parsedCutiDates.push(tanggalCuti);
     }
 
-    const handoverIdsInput = body?.['handover_tag_user_ids[]'] ?? body?.handover_tag_user_ids;
-    const handoverIds = sanitizeHandoverIds(handoverIdsInput);
+    const dedupDatesMap = new Map();
+    for (const dt of parsedCutiDates) {
+      dedupDatesMap.set(formatDateISO(dt), dt);
+    }
+    const dedupDates = Array.from(dedupDatesMap.values()).sort((a, b) => a.getTime() - b.getTime());
 
-    const kategori = await db.kategoriCuti.findFirst({
-      where: { id_kategori_cuti, deleted_at: null },
-      select: { id_kategori_cuti: true, pengurangan_kouta: true }, // ← [FIX]
-    });
-
-    if (!kategori) {
-      return NextResponse.json({ ok: false, message: 'Kategori cuti tidak ditemukan.' }, { status: 404 });
+    if (!dedupDates.length) {
+      return NextResponse.json({ ok: false, message: 'tanggal_cuti wajib diisi.' }, { status: 400 });
     }
 
-    if (handoverIds && handoverIds.length) {
-      const users = await db.user.findMany({
-        where: { id_user: { in: handoverIds }, deleted_at: null },
-        select: { id_user: true }, // ← [FIX]
+    const handoverIds = sanitizeHandoverIds(body?.handover_tag_user_ids ?? body?.['handover_tag_user_ids[]']);
+    if (handoverIds !== undefined && handoverIds.length) {
+      const handoverUsers = await db.user.findMany({
+        where: {
+          id_user: { in: handoverIds },
+          deleted_at: null,
+        },
+        select: { id_user: true },
       });
 
-      const foundIds = new Set(users.map((u) => u.id_user));
+      const foundIds = new Set(handoverUsers.map((u) => u.id_user));
       const missing = handoverIds.filter((id) => !foundIds.has(id));
+
       if (missing.length) {
-        return NextResponse.json({ ok: false, message: 'Beberapa handover_tag_user_ids tidak valid.' }, { status: 400 });
+        const validOnes = handoverIds.filter((id) => foundIds.has(id));
+        handoverIds.length = 0;
+        handoverIds.push(...validOnes);
       }
     }
-
+    
     let approvalsInput;
     try {
       approvalsInput = parseApprovalsFromBody(body);
@@ -478,18 +554,33 @@ export async function POST(req) {
 
     let uploadMeta = null;
     let lampiranUrl = null;
+
     const lampiranFile = findFileInBody(body, ['lampiran_cuti', 'lampiran', 'lampiran_file', 'file']);
     if (lampiranFile) {
       try {
-        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
-        lampiranUrl = res.publicUrl || null;
-        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+        const uploaded = await uploadMediaWithFallback(lampiranFile, {
+          folder: 'pengajuan-cuti',
+          namespace: actorId,
+        });
+        uploadMeta = uploaded;
+        lampiranUrl = uploaded.publicUrl || null;
       } catch (e) {
-        return NextResponse.json({ ok: false, message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+        console.error('Upload lampiran cuti gagal:', e);
+        return NextResponse.json(
+          {
+            ok: false,
+            message: 'Gagal mengunggah lampiran.',
+            error: {
+              code: e?.code,
+              message: e?.message,
+              errors: e?.errors,
+            },
+          },
+          { status: e?.status || 502 }
+        );
       }
     }
 
-    // Transaksi: create pengajuan + tanggal_list + approvals + handover
     const fullPengajuan = await db.$transaction(async (tx) => {
       const created = await tx.pengajuanCuti.create({
         data: {
@@ -503,9 +594,9 @@ export async function POST(req) {
         },
       });
 
-      if (parsedCutiDates.length) {
+      if (dedupDates.length) {
         await tx.pengajuanCutiTanggal.createMany({
-          data: parsedCutiDates.map((tgl) => ({
+          data: dedupDates.map((tgl) => ({
             id_pengajuan_cuti: created.id_pengajuan_cuti,
             tanggal_cuti: tgl,
           })),
@@ -517,7 +608,7 @@ export async function POST(req) {
         await syncApprovalRecords(tx, created.id_pengajuan_cuti, approvalsInput);
       }
 
-      if (handoverIds && handoverIds.length) {
+      if (handoverIds !== undefined && handoverIds.length) {
         await tx.handoverCuti.createMany({
           data: handoverIds.map((id_user_tagged) => ({
             id_pengajuan_cuti: created.id_pengajuan_cuti,
@@ -533,121 +624,11 @@ export async function POST(req) {
       });
     });
 
-    // Notifikasi (pemohon & handover)
     if (fullPengajuan) {
-      const deeplink = `/pengajuan-cuti/${fullPengajuan.id_pengajuan_cuti}`;
-
-      const rawDates = (fullPengajuan.tanggal_list || []).map((d) => (d?.tanggal_cuti instanceof Date ? d.tanggal_cuti : new Date(d.tanggal_cuti))).sort((a, b) => a.getTime() - b.getTime());
-      const tanggalCutiPertama = rawDates.length ? rawDates[0] : null;
-
-      const basePayload = {
-        nama_pemohon: fullPengajuan.user?.nama_pengguna || 'Rekan',
-        kategori_cuti: fullPengajuan.kategori_cuti?.nama_kategori || '-',
-        tanggal_cuti: formatDateISO(tanggalCutiPertama),
-        tanggal_cuti_display: formatDateDisplay(tanggalCutiPertama),
-        tanggal_masuk_kerja: formatDateISO(fullPengajuan.tanggal_masuk_kerja),
-        tanggal_masuk_kerja_display: formatDateDisplay(fullPengajuan.tanggal_masuk_kerja),
-        keperluan: fullPengajuan.keperluan || '-',
-        handover: fullPengajuan.handover || '-',
-        related_table: 'pengajuan_cuti',
-        related_id: fullPengajuan.id_pengajuan_cuti,
-        deeplink,
-      };
-
-      const notifiedUsers = new Set();
-      const notifPromises = [];
-      if (Array.isArray(fullPengajuan.handover_users)) {
-        for (const handoverUser of fullPengajuan.handover_users) {
-          const taggedId = handoverUser?.id_user_tagged;
-          if (!taggedId || notifiedUsers.has(taggedId)) continue;
-          notifiedUsers.add(taggedId);
-
-          // PERUBAHAN: Pesan spesifik untuk Handover (menambahkan isi handover ke body)
-          const handoverTitle = `${basePayload.nama_pemohon} menandai Anda`;
-          const handoverBody = `Anda ditunjuk sebagai handover oleh ${basePayload.nama_pemohon}. ${basePayload.handover || ''}`;
-
-          notifPromises.push(
-            sendNotification(
-              'LEAVE_HANDOVER_TAGGED',
-              taggedId,
-              {
-                ...basePayload,
-                handover: basePayload.handover,
-                nama_penerima: handoverUser?.user?.nama_pengguna || undefined,
-                pesan_penerima: handoverBody, // Pesan spesifik
-                title: handoverTitle, // Title spesifik
-                body: handoverBody, // Body spesifik
-                overrideTitle: handoverTitle, // Override Title
-                overrideBody: handoverBody, // Override Body
-              },
-              { deeplink }
-            )
-          );
-        }
-      }
-      if (fullPengajuan.id_user && !notifiedUsers.has(fullPengajuan.id_user)) {
-        const overrideTitle = 'Pengajuan cuti berhasil dikirim';
-        const overrideBody = `Pengajuan cuti ${basePayload.kategori_cuti} pada ${basePayload.tanggal_cuti_display} telah berhasil dibuat.`;
-        notifPromises.push(
-          sendNotification(
-            'LEAVE_HANDOVER_TAGGED',
-            fullPengajuan.id_user,
-            {
-              ...basePayload,
-              is_pemohon: true,
-              title: overrideTitle,
-              body: overrideBody,
-              overrideTitle,
-              overrideBody,
-            },
-            { deeplink }
-          )
-        );
-        notifiedUsers.add(fullPengajuan.id_user);
-      }
-      // === Notif ke approver (rantai persetujuan) ===
-      if (Array.isArray(fullPengajuan.approvals) && fullPengajuan.approvals.length) {
-        const approverIds = fullPengajuan.approvals.map((a) => a.approver_user_id).filter(Boolean);
-
-        if (approverIds.length) {
-          const approvers = await db.user.findMany({
-            where: {
-              id_user: { in: approverIds },
-              deleted_at: null,
-            },
-            select: { id_user: true, nama_pengguna: true },
-          });
-
-          for (const approver of approvers) {
-            const uid = approver.id_user;
-            if (!uid || notifiedUsers.has(uid)) continue;
-            notifiedUsers.add(uid);
-
-            const overrideTitle = `${basePayload.nama_pemohon} mengajukan cuti`;
-            const overrideBody = `${basePayload.nama_pemohon} mengajukan cuti ${basePayload.kategori_cuti} pada ${basePayload.tanggal_cuti_display}.`;
-
-            notifPromises.push(
-              sendNotification(
-                'LEAVE_HANDOVER_TAGGED',
-                uid,
-                {
-                  ...basePayload,
-                  is_approver: true,
-                  nama_penerima: approver.nama_pengguna || 'Admin',
-                  title: overrideTitle,
-                  body: overrideBody,
-                  overrideTitle,
-                  overrideBody,
-                },
-                { deeplink }
-              )
-            );
-          }
-        }
-      }
-
-      if (notifPromises.length) {
-        await Promise.allSettled(notifPromises);
+      try {
+        await sendPengajuanCutiEmailNotifications(req, fullPengajuan);
+      } catch (emailErr) {
+        console.warn('POST /mobile/pengajuan-cuti: email notification failed:', emailErr?.message || emailErr);
       }
     }
 

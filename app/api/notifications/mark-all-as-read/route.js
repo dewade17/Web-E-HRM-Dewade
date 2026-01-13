@@ -1,4 +1,4 @@
-// app/api/notifications/mark-all-read/route.js
+// app/api/notifications/mark-all-as-read/route.js
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { ensureNotificationAuth } from '../_auth';
@@ -18,11 +18,11 @@ export async function PUT(request) {
     const result = await db.notification.updateMany({
       where: {
         id_user: userId,
-        status: 'unread',
+        status: "unread",
         deleted_at: null,
       },
       data: {
-        status: 'read',
+        status: "read",
         read_at: now,
         seen_at: now,
       },

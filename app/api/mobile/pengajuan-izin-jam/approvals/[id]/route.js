@@ -66,12 +66,19 @@ function summarizeApprovalStatus(approvals) {
 
 async function handleDecision(req, { params }) {
   const auth = await ensureAuth(req);
+  
+  // Jika auth memulangkan NextResponse (ralat 401/403 dari authenticateRequest)
   if (auth instanceof NextResponse) return auth;
 
-  const actorId = auth?.actor?.id;
-  const actorRole = normalizeRole(auth?.actor?.role);
-  if (!actorId) return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
+  // PERBAIKAN: Ambil actorId dan actorRole mengikut struktur yang betul
+  // Jika menggunakan Versi 1 route.js:
+  const actorId = auth?.actorId || auth?.actor?.id; 
+  const actorRole = normalizeRole(auth?.actorRole || auth?.actor?.role);
 
+  if (!actorId) {
+    return NextResponse.json({ message: 'Unauthorized.' }, { status: 401 });
+  }
+  
   const id = params?.id;
   if (!id) return NextResponse.json({ message: 'id wajib diisi.' }, { status: 400 });
 

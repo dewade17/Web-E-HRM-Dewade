@@ -1,9 +1,11 @@
+export const runtime = 'nodejs';
+
 import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC, parseDateTimeToUTC } from '@/helpers/date-helper';
-import storageClient from '@/app/api/_utils/storageClient';
+import { uploadMediaWithFallback } from '@/app/api/_utils/uploadWithFallback';
 import { parseRequestBody, findFileInBody, hasOwn } from '@/app/api/_utils/requestBody';
 import { readApprovalsFromBody } from '../_utils/approvals';
 
@@ -310,11 +312,33 @@ export async function PUT(req, { params }) {
     const newFile = findFileInBody(body, ['lampiran_izin_jam', 'lampiran', 'lampiran_file', 'file']);
     if (newFile) {
       try {
-        const res = await storageClient.uploadBufferWithPresign(newFile, { folder: 'pengajuan' });
-        data.lampiran_izin_jam_url = res.publicUrl || null;
-        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+        const uploaded = await uploadMediaWithFallback(newFile, {
+          storageFolder: 'pengajuan',
+          supabasePrefix: 'pengajuan',
+          pathSegments: [String(pengajuan.id_user)],
+        });
+
+        data.lampiran_izin_jam_url = uploaded.publicUrl || null;
+
+        uploadMeta = {
+          provider: uploaded.provider,
+          publicUrl: uploaded.publicUrl || null,
+          key: uploaded.key,
+          etag: uploaded.etag,
+          size: uploaded.size,
+          bucket: uploaded.bucket,
+          path: uploaded.path,
+          fallbackFromStorageError: uploaded.errors?.storage || undefined,
+        };
       } catch (e) {
-        return NextResponse.json({ message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+        return NextResponse.json(
+          {
+            message: 'Gagal mengunggah lampiran.',
+            detail: e?.message || String(e),
+            errors: e?.errors,
+          },
+          { status: e?.status || 502 }
+        );
       }
     } else if (hasOwn(body, 'lampiran_izin_jam_url') || hasOwn(body, 'lampiran_url') || hasOwn(body, 'lampiran')) {
       const lampiran = normalizeLampiranInput(body.lampiran_izin_jam_url ?? body.lampiran_url ?? body.lampiran);

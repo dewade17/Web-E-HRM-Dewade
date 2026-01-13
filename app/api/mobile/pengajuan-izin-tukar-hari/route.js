@@ -5,9 +5,9 @@ import db from '@/lib/prisma';
 import { verifyAuthToken } from '@/lib/jwt';
 import { authenticateRequest } from '@/app/utils/auth/authUtils';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper';
-import storageClient from '@/app/api/_utils/storageClient';
+import { uploadMediaWithFallback } from '@/app/api/_utils/uploadWithFallback';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
-import { sendNotification } from '@/app/utils/services/notificationService';
+import { sendPengajuanIzinTukarHariEmailNotifications } from './_utils/emailNotifications';
 
 const APPROVE_STATUSES = new Set(['disetujui', 'ditolak', 'pending']);
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
@@ -52,25 +52,164 @@ function formatDateDisplay(value) {
   }
 }
 
-export async function ensureAuth(req) {
-  const auth = req.headers.get('authorization') || '';
-  if (auth.startsWith('Bearer ')) {
-    try {
-      const payload = verifyAuthToken(auth.slice(7).trim());
-      const id = payload?.sub || payload?.id_user || payload?.userId || payload?.id;
-      if (id) {
-        return { actor: { id, role: payload?.role, source: 'bearer' } };
-      }
-    } catch {}
+function isNullLike(value) {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') {
+    const v = value.trim().toLowerCase();
+    return v === '' || v === 'null' || v === 'undefined' || v === '-';
+  }
+  return false;
+}
+
+function normalizeStringOrNull(value) {
+  if (isNullLike(value)) return null;
+  const s = String(value).trim();
+  return s ? s : null;
+}
+
+function normalizeStringOrUndefined(value) {
+  if (value === undefined) return undefined;
+  if (isNullLike(value)) return null;
+  const s = String(value).trim();
+  return s ? s : null;
+}
+
+function parseJsonMaybe(value) {
+  if (typeof value !== 'string') return value;
+  const s = value.trim();
+  if (!s) return value;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return value;
+  }
+}
+
+function parseSafeDateOnly(value) {
+  if (value === undefined) return undefined;
+  if (isNullLike(value)) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  return parseDateOnlyToUTC(s);
+}
+
+function sanitizeHandoverIds(ids) {
+  if (ids === undefined) return undefined;
+  if (typeof ids === 'string' && ids.trim() === '[]') return [];
+  const arr = Array.isArray(ids) ? ids : [ids];
+  const unique = new Set();
+  for (const raw of arr) {
+    const val = String(raw || '').trim();
+    if (!val) continue;
+    unique.add(val);
+  }
+  return Array.from(unique);
+}
+
+function parsePairsFromBody(body) {
+  const raw = body?.pairs ?? body?.pair ?? body?.pairs_json ?? body?.pairsData ?? body?.data_pairs;
+  if (raw === undefined) return [];
+
+  if (typeof raw === 'string') {
+    const parsed = parseJsonMaybe(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return [];
   }
 
+  if (Array.isArray(raw)) return raw;
+
+  if (typeof raw === 'object' && raw) {
+    const maybe = raw?.data ?? raw?.items;
+    if (Array.isArray(maybe)) return maybe;
+  }
+
+  return [];
+}
+
+function normalizePair(p, index) {
+  const hariIzin = parseSafeDateOnly(p?.hari_izin ?? p?.hariIzin ?? p?.tanggal_izin ?? p?.tanggalIzin);
+  const hariPengganti = parseSafeDateOnly(p?.hari_pengganti ?? p?.hariPengganti ?? p?.tanggal_pengganti ?? p?.tanggalPengganti);
+  const catatan = normalizeStringOrNull(p?.catatan_pair ?? p?.catatanPair ?? p?.catatan);
+
+  if (!hariIzin || !(hariIzin instanceof Date)) {
+    return { ok: false, message: `Hari izin tidak valid pada pair #${index + 1}` };
+  }
+  if (!hariPengganti || !(hariPengganti instanceof Date)) {
+    return { ok: false, message: `Hari pengganti tidak valid pada pair #${index + 1}` };
+  }
+
+  return {
+    ok: true,
+    value: {
+      hari_izin: hariIzin,
+      hari_pengganti: hariPengganti,
+      catatan_pair: catatan,
+    },
+  };
+}
+
+async function validateAndNormalizePairs(actorId, pairsRaw) {
+  const list = Array.isArray(pairsRaw) ? pairsRaw : [];
+  if (!list.length) {
+    return { ok: false, status: 400, message: 'Pairs wajib diisi minimal 1 item.' };
+  }
+
+  const normalized = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const result = normalizePair(list[i], i);
+    if (!result.ok) return { ok: false, status: 400, message: result.message };
+    normalized.push(result.value);
+  }
+
+  const dayKey = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d));
+  const seenIzin = new Set();
+  for (const p of normalized) {
+    const k = dayKey(p.hari_izin);
+    if (seenIzin.has(k)) {
+      return { ok: false, status: 400, message: `Duplikasi hari_izin ditemukan: ${k}` };
+    }
+    seenIzin.add(k);
+  }
+
+  const userExists = await db.user.findFirst({
+    where: { id_user: actorId, deleted_at: null },
+    select: { id_user: true },
+  });
+
+  if (!userExists) {
+    return { ok: false, status: 401, message: 'Unauthorized.' };
+  }
+
+  return { ok: true, value: normalized };
+}
+
+export async function ensureAuth(req) {
+  const auth = req.headers.get('authorization') || req.headers.get('Authorization') || '';
+
+  // 1) Coba Bearer token dulu (kalau gagal, JANGAN return 401 — fallback ke session)
+  if (auth.startsWith('Bearer ')) {
+    const token = auth.slice(7).trim();
+    try {
+      const payload = verifyAuthToken(token);
+      const id = payload?.sub || payload?.id_user || payload?.userId || payload?.id;
+
+      if (id) {
+        return { actor: { id: String(id), role: payload?.role, source: 'bearer' } };
+      }
+      // payload valid tapi tidak ada id => lanjut fallback session
+    } catch {
+      // token invalid => fallback session
+    }
+  }
+
+  // 2) Fallback ke NextAuth session
   const sessionOrRes = await authenticateRequest();
   if (sessionOrRes instanceof NextResponse) return sessionOrRes;
 
   const id = sessionOrRes?.user?.id || sessionOrRes?.user?.id_user;
   if (!id) return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
 
-  return { actor: { id, role: sessionOrRes?.user?.role, source: 'session' } };
+  return { actor: { id: String(id), role: sessionOrRes?.user?.role, source: 'session' } };
 }
 
 export const izinInclude = {
@@ -92,6 +231,28 @@ export const izinInclude = {
         select: {
           id_jabatan: true,
           nama_jabatan: true,
+        },
+      },
+    },
+  },
+  approvals: {
+    where: { deleted_at: null },
+    orderBy: { level: 'asc' },
+    select: {
+      id_approval_izin_tukar_hari: true,
+      level: true,
+      approver_user_id: true,
+      approver_role: true,
+      decision: true,
+      decided_at: true,
+      note: true,
+      approver: {
+        select: {
+          id_user: true,
+          nama_pengguna: true,
+          email: true,
+          role: true,
+          foto_profil_user: true,
         },
       },
     },
@@ -122,256 +283,60 @@ export const izinInclude = {
       },
     },
   },
-  approvals: {
-    where: { deleted_at: null },
-    orderBy: { level: 'asc' },
-    select: {
-      id_approval_izin_tukar_hari: true,
-      level: true,
-      approver_user_id: true,
-      approver_role: true,
-      decision: true,
-      decided_at: true,
-      note: true,
-      approver: {
-        select: {
-          id_user: true,
-          nama_pengguna: true,
-          email: true,
-          role: true,
-          foto_profil_user: true,
-        },
-      },
-    },
-  },
   pairs: {
     select: { id_izin_tukar_hari_pair: true, hari_izin: true, hari_pengganti: true, catatan_pair: true },
     orderBy: { hari_izin: 'asc' },
   },
 };
 
-function parseDateQuery(v) {
-  if (v === null || v === undefined) return null;
-  const s = String(v).trim();
-  if (!s) return null;
-  return parseDateOnlyToUTC(s);
-}
-
-function sanitizeHandoverIds(ids) {
-  if (ids === undefined) return undefined;
-  if (typeof ids === 'string' && ids.trim() === '[]') return [];
-  const arr = Array.isArray(ids) ? ids : [ids];
-  const unique = new Set();
-  for (const raw of arr) {
-    const val = String(raw || '').trim();
-    if (!val) continue;
-    unique.add(val);
-  }
-  return Array.from(unique);
-}
-
-function parsePairsFromBody(body) {
-  if (!body) return [];
-  if (Array.isArray(body.pairs)) {
-    return body.pairs.map((p) => {
-      if (typeof p === 'string') {
-        try {
-          return JSON.parse(p);
-        } catch {
-          return {};
-        }
-      }
-      return p || {};
-    });
-  }
-  const arr = body['pairs[]'];
-  if (arr !== undefined) {
-    const list = Array.isArray(arr) ? arr : [arr];
-    return list.map((s) => {
-      try {
-        return JSON.parse(s);
-      } catch {
-        return {};
-      }
-    });
-  }
-  const izinArr = body['hari_izin[]'] ?? body.hari_izin;
-  const gantiArr = body['hari_pengganti[]'] ?? body.hari_pengganti;
-  if (izinArr !== undefined && gantiArr !== undefined) {
-    const ia = Array.isArray(izinArr) ? izinArr : [izinArr];
-    const ga = Array.isArray(gantiArr) ? gantiArr : [gantiArr];
-    const n = Math.max(ia.length, ga.length);
-    const res = [];
-    for (let i = 0; i < n; i++) {
-      res.push({ hari_izin: ia[i], hari_pengganti: ga[i] });
-    }
-    return res;
-  }
-  return [];
-}
-
-async function validateAndNormalizePairs(userId, pairsRaw) {
-  if (!Array.isArray(pairsRaw) || pairsRaw.length === 0) {
-    return { ok: false, status: 400, message: 'pairs wajib diisi minimal 1 pasangan hari.' };
-  }
-
-  const normalized = [];
-  const seenIzin = new Set();
-  const seenGanti = new Set();
-  const dateKey = (d) => formatDateISO(d);
-
-  for (let i = 0; i < pairsRaw.length; i++) {
-    const p = pairsRaw[i] || {};
-    const izin = parseDateOnlyToUTC(p.hari_izin ?? p.izin ?? p.date_izin);
-    const ganti = parseDateOnlyToUTC(p.hari_pengganti ?? p.pengganti ?? p.date_pengganti);
-    const note = p.catatan_pair === undefined || p.catatan_pair === null ? null : String(p.catatan_pair);
-
-    if (!izin || !ganti) {
-      return { ok: false, status: 400, message: `Pair #${i + 1} tidak valid: 'hari_izin' dan 'hari_pengganti' wajib berupa tanggal valid (YYYY-MM-DD).` };
-    }
-    if (izin.getTime() === ganti.getTime()) {
-      return { ok: false, status: 400, message: `Pair #${i + 1} tidak valid: 'hari_izin' tidak boleh sama dengan 'hari_pengganti'.` };
-    }
-
-    const kI = dateKey(izin);
-    const kG = dateKey(ganti);
-    if (seenIzin.has(kI)) {
-      return { ok: false, status: 400, message: `Tanggal 'hari_izin' ${kI} duplikat dalam pengajuan ini.` };
-    }
-    if (seenGanti.has(kG)) {
-      return { ok: false, status: 400, message: `Tanggal 'hari_pengganti' ${kG} duplikat dalam pengajuan ini.` };
-    }
-    seenIzin.add(kI);
-    seenGanti.add(kG);
-
-    normalized.push({ hari_izin: izin, hari_pengganti: ganti, catatan_pair: note });
-  }
-
-  const izinDates = normalized.map((p) => p.hari_izin);
-  const gantiDates = normalized.map((p) => p.hari_pengganti);
-
-  const existingPairs = await db.izinTukarHariPair.findMany({
-    where: {
-      OR: [{ hari_izin: { in: izinDates } }, { hari_pengganti: { in: gantiDates } }],
-      izin_tukar_hari: {
-        id_user: userId,
-        deleted_at: null,
-        status: { in: ['pending', 'disetujui'] },
-      },
-    },
-    select: { hari_izin: true, hari_pengganti: true },
-  });
-
-  if (existingPairs.length) {
-    const details = existingPairs.map((p) => `(${formatDateISO(p.hari_izin)} ↔ ${formatDateISO(p.hari_pengganti)})`).join(', ');
-    return { ok: false, status: 409, message: `Terdapat pasangan yang sudah diajukan sebelumnya: ${details}.` };
-  }
-
-  const cutiBentrok = await db.pengajuanCutiTanggal.findMany({
-    where: {
-      tanggal_cuti: { in: [...izinDates, ...gantiDates] },
-      pengajuan_cuti: {
-        id_user: userId,
-        deleted_at: null,
-        status: 'disetujui',
-      },
-    },
-    select: { tanggal_cuti: true },
-  });
-  if (cutiBentrok.length) {
-    const list = Array.from(new Set(cutiBentrok.map((x) => formatDateISO(x.tanggal_cuti)))).join(', ');
-    return { ok: false, status: 409, message: `Tanggal berikut sudah tercatat sebagai cuti disetujui: ${list}.` };
-  }
-
-  return { ok: true, value: normalized };
-}
-
 export async function GET(req) {
   const auth = await ensureAuth(req);
   if (auth instanceof NextResponse) return auth;
+
   const actorId = auth.actor?.id;
-  if (!actorId) return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
+  const role = auth.actor?.role;
 
   try {
     const { searchParams } = new URL(req.url);
 
-    const rawPage = parseInt(searchParams.get('page') || '1', 10);
-    const page = Number.isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
-    const perRaw = parseInt(searchParams.get('perPage') || searchParams.get('pageSize') || '20', 10);
-    const perPage = Math.min(Math.max(Number.isNaN(perRaw) ? 20 : perRaw, 1), 100);
-
     const statusParam = searchParams.get('status');
-    const status = normalizeStatus(statusParam);
-    if (statusParam && !status) {
-      return NextResponse.json({ ok: false, message: 'Parameter status tidak valid.' }, { status: 400 });
-    }
+    const pageRaw = searchParams.get('page') || '1';
+    const limitRaw = searchParams.get('limit') || '20';
 
-    const kategori = (searchParams.get('kategori') || '').trim();
-    const targetUser = (searchParams.get('id_user') || '').trim();
+    const page = Math.max(parseInt(pageRaw, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(limitRaw, 10) || 20, 1), 200);
+    const skip = (page - 1) * limit;
 
-    const hariIzinEq = searchParams.get('hari_izin');
-    const hariIzinFrom = searchParams.get('hari_izin_from');
-    const hariIzinTo = searchParams.get('hari_izin_to');
-    const hariPenggantiEq = searchParams.get('hari_pengganti');
-    const hariPenggantiFrom = searchParams.get('hari_pengganti_from');
-    const hariPenggantiTo = searchParams.get('hari_pengganti_to');
+    const where = { deleted_at: null };
 
-    const where = { deleted_at: null, jenis_pengajuan: 'hari' };
-
-    if (canManageAll(auth.actor?.role)) {
-      if (targetUser) where.id_user = targetUser;
-    } else {
+    const userParam = searchParams.get('id_user');
+    if (!canManageAll(role)) {
       where.id_user = actorId;
+    } else if (userParam) {
+      where.id_user = userParam;
     }
 
-    if (status) {
-      where.status = status;
-    }
-    if (kategori) where.kategori = kategori;
-
-    const pairFilter = {};
-    if (hariIzinEq) {
-      const eq = parseDateQuery(hariIzinEq);
-      if (!eq) return NextResponse.json({ ok: false, message: 'Parameter hari_izin tidak valid.' }, { status: 400 });
-      pairFilter.hari_izin = eq;
-    } else if (hariIzinFrom || hariIzinTo) {
-      const gte = parseDateQuery(hariIzinFrom);
-      const lte = parseDateQuery(hariIzinTo);
-      if (hariIzinFrom && !gte) return NextResponse.json({ ok: false, message: 'Parameter hari_izin_from tidak valid.' }, { status: 400 });
-      if (hariIzinTo && !lte) return NextResponse.json({ ok: false, message: 'Parameter hari_izin_to tidak valid.' }, { status: 400 });
-      pairFilter.hari_izin = { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) };
-    }
-    if (hariPenggantiEq) {
-      const eq = parseDateQuery(hariPenggantiEq);
-      if (!eq) return NextResponse.json({ ok: false, message: 'Parameter hari_pengganti tidak valid.' }, { status: 400 });
-      pairFilter.hari_pengganti = eq;
-    } else if (hariPenggantiFrom || hariPenggantiTo) {
-      const gte = parseDateQuery(hariPenggantiFrom);
-      const lte = parseDateQuery(hariPenggantiTo);
-      if (hariPenggantiFrom && !gte) return NextResponse.json({ ok: false, message: 'Parameter hari_pengganti_from tidak valid.' }, { status: 400 });
-      if (hariPenggantiTo && !lte) return NextResponse.json({ ok: false, message: 'Parameter hari_pengganti_to tidak valid.' }, { status: 400 });
-      pairFilter.hari_pengganti = { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) };
+    if (statusParam !== null && statusParam !== undefined && statusParam !== '') {
+      const normalized = normalizeStatus(statusParam);
+      if (!normalized) return NextResponse.json({ ok: false, message: 'Parameter status tidak valid.' }, { status: 400 });
+      where.status = normalized;
     }
 
-    if (Object.keys(pairFilter).length) {
-      where.pairs = { some: pairFilter };
-    }
-
-    const [total, items] = await Promise.all([
+    const [total, rows] = await Promise.all([
       db.izinTukarHari.count({ where }),
       db.izinTukarHari.findMany({
         where,
-        orderBy: [{ created_at: 'desc' }],
-        skip: (page - 1) * perPage,
-        take: perPage,
         include: izinInclude,
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: limit,
       }),
     ]);
 
     return NextResponse.json({
       ok: true,
-      data: items,
-      meta: { page, perPage, total, totalPages: Math.ceil(total / perPage) },
+      data: rows,
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
     console.error('GET /mobile/izin-tukar-hari error:', err);
@@ -384,54 +349,40 @@ export async function POST(req) {
   if (auth instanceof NextResponse) return auth;
 
   const actorId = auth.actor?.id;
-  if (!actorId) {
-    return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });
-  }
-
-  let parsed;
-  try {
-    parsed = await parseRequestBody(req);
-  } catch (err) {
-    const status = err?.status || 400;
-    return NextResponse.json({ ok: false, message: err?.message || 'Body request tidak valid.' }, { status });
-  }
-  const body = parsed.body || {};
 
   try {
-    const kategori = String(body?.kategori || '').trim();
-    const keperluan = body?.keperluan === undefined || body?.keperluan === null ? null : String(body.keperluan);
-    const handover = body?.handover === undefined || body?.handover === null ? null : String(body.handover);
+    const parsed = await parseRequestBody(req);
+    const body = parsed.body || {};
 
-    if (!kategori) {
-      return NextResponse.json({ ok: false, message: 'kategori wajib diisi.' }, { status: 400 });
-    }
+    const kategori = normalizeStringOrNull(body.kategori) || normalizeStringOrNull(body.nama_kategori) || normalizeStringOrNull(body.kategori_tukar_hari);
+    if (!kategori) return NextResponse.json({ ok: false, message: 'Kategori wajib diisi.' }, { status: 400 });
 
-    const jenis_pengajuan = 'hari';
+    const keperluan = normalizeStringOrNull(body.keperluan) || null;
+    const handover = normalizeStringOrNull(body.handover) || null;
 
-    const handoverIdsInput = body?.['handover_tag_user_ids[]'] ?? body?.handover_tag_user_ids;
-    const handoverIds = sanitizeHandoverIds(handoverIdsInput);
-    if (handoverIds && handoverIds.length) {
-      const users = await db.user.findMany({
-        where: { id_user: { in: handoverIds }, deleted_at: null },
-        select: { id_user: true },
-      });
-      const found = new Set(users.map((u) => u.id_user));
-      const missing = handoverIds.filter((id) => !found.has(id));
-      if (missing.length) {
-        return NextResponse.json({ ok: false, message: 'Beberapa handover_tag_user_ids tidak valid.' }, { status: 400 });
-      }
-    }
+    const jenis_pengajuan = normalizeStringOrNull(body.jenis_pengajuan) || 'izin_tukar_hari';
 
+    const file = findFileInBody(body, ['lampiran', 'lampiran_izin_tukar_hari', 'file', 'attachment']);
+    
     let uploadMeta = null;
-    let lampiranUrl = null;
-    const lampiranFile = findFileInBody(body, ['lampiran_izin_tukar_hari', 'lampiran', 'lampiran_file', 'file']);
-    if (lampiranFile) {
+    let lampiranUrl = normalizeStringOrNull(body.lampiran_izin_tukar_hari_url);
+
+    if (file) {
       try {
-        const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'izin-tukar-hari' });
-        lampiranUrl = res.publicUrl || null;
-        uploadMeta = { key: res.key, publicUrl: res.publicUrl, etag: res.etag, size: res.size };
+        const uploaded = await uploadMediaWithFallback(file, { folder: 'izin-tukar-hari', public: true });
+        lampiranUrl = uploaded.publicUrl || null;
+        uploadMeta = {
+          provider: uploaded.provider,
+          publicUrl: uploaded.publicUrl || null,
+          key: uploaded.key,
+          etag: uploaded.etag,
+          size: uploaded.size,
+          bucket: uploaded.bucket,
+          path: uploaded.path,
+          fallbackFromStorageError: uploaded.errors?.storage || undefined,
+        };
       } catch (e) {
-        return NextResponse.json({ ok: false, message: 'Gagal mengunggah lampiran.', detail: e?.message || String(e) }, { status: 502 });
+        console.warn('POST /mobile/izin-tukar-hari: upload failed:', e?.message || e);
       }
     }
 
@@ -450,28 +401,19 @@ export async function POST(req) {
       approvals = list.flatMap((a) => {
         if (typeof a === 'string') {
           try {
-            const parsed = JSON.parse(a);
-            return Array.isArray(parsed) ? parsed : [parsed];
+            const parsedA = JSON.parse(a);
+            return Array.isArray(parsedA) ? parsedA : [parsedA];
           } catch {
-            return [{}];
+            return [];
           }
         }
-        return [a || {}];
+        if (Array.isArray(a)) return a;
+        if (a && typeof a === 'object') return [a];
+        return [];
       });
-
-      const approverIds = approvals.map((a) => a.approver_user_id).filter(Boolean);
-      if (approverIds.length) {
-        const users = await db.user.findMany({
-          where: { id_user: { in: approverIds }, deleted_at: null },
-          select: { id_user: true },
-        });
-        const okIds = new Set(users.map((u) => u.id_user));
-        const notFound = approverIds.filter((x) => !okIds.has(x));
-        if (notFound.length) {
-          return NextResponse.json({ ok: false, message: 'Beberapa approver_user_id tidak ditemukan.' }, { status: 400 });
-        }
-      }
     }
+
+    const handoverIds = sanitizeHandoverIds(body.handover_user_ids ?? body.handover_ids ?? body.id_user_tagged ?? body.tag_user_ids ?? body.tagged_user_ids);
 
     const full = await db.$transaction(async (tx) => {
       const created = await tx.izinTukarHari.create({
@@ -528,104 +470,11 @@ export async function POST(req) {
     });
 
     if (full) {
-      const deeplink = `/izin-tukar-hari/${full.id_izin_tukar_hari}`;
-      const firstPair = (full.pairs || [])[0];
-      const hariIzinDisplay = formatDateDisplay(firstPair?.hari_izin);
-      const bodyBase = {
-        kategori: full.kategori,
-        hari_izin: firstPair?.hari_izin ? formatDateISO(firstPair.hari_izin) : undefined,
-        hari_izin_display: hariIzinDisplay,
-        related_table: 'izin_tukar_hari',
-        related_id: full.id_izin_tukar_hari,
-        deeplink,
-        handover: full.handover, // Pastikan handover ada di bodyBase
-      };
-
-      const promises = [];
-
-      promises.push(
-        sendNotification(
-          'SWAP_CREATE_SUCCESS',
-          full.id_user,
-          {
-            ...bodyBase,
-            title: 'Pengajuan izin tukar hari terkirim',
-            body: `Pengajuan tukar hari kategori ${full.kategori} telah dibuat (mulai ${hariIzinDisplay}).`,
-            overrideTitle: 'Pengajuan izin tukar hari terkirim',
-            overrideBody: `Pengajuan tukar hari kategori ${full.kategori} telah dibuat (mulai ${hariIzinDisplay}).`,
-          },
-          { deeplink }
-        )
-      );
-
-      if (Array.isArray(full.handover_users)) {
-        const sent = new Set();
-        for (const h of full.handover_users) {
-          const uid = h?.id_user_tagged;
-          if (!uid || sent.has(uid)) continue;
-          sent.add(uid);
-
-          // PERUBAHAN: Pesan spesifik untuk Handover
-          const handoverTitle = `${full.user?.nama_pengguna || 'Rekan'} menandai Anda`;
-          const handoverBody = `Anda ditunjuk sebagai handover oleh ${full.user?.nama_pengguna || 'Rekan'}. ${bodyBase.handover || ''}`;
-
-          promises.push(
-            sendNotification(
-              'SWAP_HANDOVER_TAGGED',
-              uid,
-              {
-                ...bodyBase,
-                nama_penerima: h?.user?.nama_pengguna || undefined,
-                pesan_penerima: handoverBody, // Pesan spesifik
-                title: handoverTitle, // Judul spesifik
-                body: handoverBody, // Body spesifik dengan isi handover
-                overrideTitle: handoverTitle, // Override judul
-                overrideBody: handoverBody, // Override body
-              },
-              { deeplink }
-            )
-          );
-        }
+      try {
+        await sendPengajuanIzinTukarHariEmailNotifications(req, full);
+      } catch (emailErr) {
+        console.warn('POST /mobile/izin-tukar-hari: email notification failed:', emailErr?.message || emailErr);
       }
-
-      if (Array.isArray(full.approvals) && full.approvals.length) {
-        const approverIds = full.approvals.map((a) => a.approver_user_id).filter(Boolean);
-
-        if (approverIds.length) {
-          const approvers = await db.user.findMany({
-            where: {
-              id_user: { in: approverIds },
-              deleted_at: null,
-            },
-            select: { id_user: true, nama_pengguna: true },
-          });
-
-          for (const admin of approvers) {
-            const uid = admin.id_user;
-            if (!uid || uid === full.id_user) continue;
-
-            const overrideTitle = `${full.user?.nama_pengguna || 'Karyawan'} mengajukan tukar hari`;
-            const overrideBody = `${full.user?.nama_pengguna || 'Karyawan'} mengajukan tukar hari kategori ${bodyBase.kategori} pada ${bodyBase.hari_izin_display}.`;
-
-            promises.push(
-              sendNotification(
-                'SWAP_HANDOVER_TAGGED',
-                uid,
-                {
-                  ...bodyBase,
-                  nama_penerima: admin.nama_pengguna || 'Admin',
-                  title: overrideTitle,
-                  body: overrideBody,
-                  overrideTitle,
-                  overrideBody,
-                },
-                { deeplink }
-              )
-            );
-          }
-        }
-      }
-      await Promise.allSettled(promises);
     }
 
     return NextResponse.json({

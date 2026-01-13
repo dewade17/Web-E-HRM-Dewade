@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import db from '@/lib/prisma';
 import { ensureAuth, pengajuanInclude } from '../route';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
-import storageClient from '@/app/api/_utils/storageClient';
+import { uploadMediaWithFallback } from '@/app/api/_utils/uploadWithFallback';
 import { parseDateOnlyToUTC } from '@/helpers/date-helper'; // Pastikan helper ini diimport
 
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
@@ -141,15 +141,40 @@ async function handleUpdate(req, { params }) {
   }
 
   // --- Upload Lampiran ---
+  // --- Upload Lampiran ---
   let lampiranUrl = undefined;
+  let uploadMeta = undefined;
   const lampiranFile = findFileInBody(body, ['lampiran_cuti', 'file', 'lampiran']);
 
   if (lampiranFile) {
     try {
-      const res = await storageClient.uploadBufferWithPresign(lampiranFile, { folder: 'pengajuan' });
-      lampiranUrl = res.publicUrl;
+      const uploaded = await uploadMediaWithFallback(lampiranFile, {
+        storageFolder: 'pengajuan',
+        supabasePrefix: 'pengajuan',
+        pathSegments: [actorId],
+      });
+
+      lampiranUrl = uploaded.publicUrl || null;
+      uploadMeta = {
+        provider: uploaded.provider,
+        publicUrl: uploaded.publicUrl || null,
+        key: uploaded.key,
+        etag: uploaded.etag,
+        size: uploaded.size,
+        bucket: uploaded.bucket,
+        path: uploaded.path,
+        fallbackFromStorageError: uploaded.errors?.storage || undefined,
+      };
     } catch (e) {
-      return NextResponse.json({ ok: false, message: 'Gagal upload lampiran baru.' }, { status: 500 });
+      return NextResponse.json(
+        {
+          ok: false,
+          message: 'Gagal mengunggah lampiran baru.',
+          detail: e?.message || String(e),
+          errors: e?.errors,
+        },
+        { status: e?.status || 502 }
+      );
     }
   }
 
@@ -208,6 +233,7 @@ async function handleUpdate(req, { params }) {
       ok: true,
       message: 'Pengajuan cuti berhasil diperbarui.',
       data: itemsProcessed,
+      upload: uploadMeta || undefined,
     });
   } catch (err) {
     console.error('Update Error:', err);
