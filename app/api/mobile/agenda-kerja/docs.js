@@ -121,11 +121,19 @@
  *               start_date:
  *                 type: string
  *                 format: date-time
+ *                 start_dates:
+ *                 type: array
+ *                 description: Daftar tanggal mulai yang akan dibuat sebagai agenda terpisah (UTC).
+ *                 items:
+ *                   type: string
+ *                   format: date-time
  *               end_date:
  *                 type: string
  *                 format: date-time
+ *                 description: Tanggal selesai bersama (UTC) untuk seluruh agenda yang dibuat.
  *               duration_seconds:
  *                 type: integer
+ *                 description: Durasi dalam detik. Jika diisi tanpa end_date, end_date akan dihitung dari start_date.
  *               id_absensi:
  *                 type: string
  *                 nullable: true
@@ -145,7 +153,14 @@
  *                 message:
  *                   type: string
  *                 data:
- *                   $ref: '#/components/schemas/MobileAgendaKerja'
+ *                    type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/MobileAgendaKerja'
+ *                 meta:
+ *                   type: object
+ *                   properties:
+ *                     created:
+ *                       type: integer
  *       '400':
  *         description: Data yang dikirim tidak valid.
  *       '401':

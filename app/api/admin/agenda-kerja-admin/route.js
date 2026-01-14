@@ -225,15 +225,46 @@ export async function POST(request) {
       return NextResponse.json({ ok: false, message: 'status tidak valid' }, { status: 400 });
     }
 
-    const start_date = toDateOrNull(body.start_date);
-    const end_date = toDateOrNull(body.end_date);
-    if (start_date && end_date && end_date < start_date) {
-      return NextResponse.json({ ok: false, message: 'end_date tidak boleh sebelum start_date' }, { status: 400 });
+    const rawStartDates = body.start_dates;
+    const hasStartDates = rawStartDates !== undefined;
+    const startDates = [];
+
+    if (hasStartDates) {
+      if (!Array.isArray(rawStartDates)) {
+        return NextResponse.json({ ok: false, message: 'start_dates harus berupa array tanggal' }, { status: 400 });
+      }
+      if (!rawStartDates.length && !body.start_date) {
+        return NextResponse.json({ ok: false, message: 'start_dates tidak boleh kosong' }, { status: 400 });
+      }
+      for (const [index, value] of rawStartDates.entries()) {
+        const parsed = toDateOrNull(value);
+        if (!parsed) {
+          return NextResponse.json({ ok: false, message: `start_dates[${index}] tidak valid` }, { status: 400 });
+        }
+        startDates.push(parsed);
+      }
     }
 
-    let duration_seconds = body.duration_seconds ?? null;
-    if (duration_seconds == null && start_date && end_date) {
-      duration_seconds = Math.max(0, Math.floor((end_date - start_date) / 1000));
+    const singleStartDate = toDateOrNull(body.start_date);
+    if (!hasStartDates) {
+      startDates.push(singleStartDate ?? null);
+    } else if (singleStartDate) {
+      const alreadyIncluded = startDates.some((d) => d.getTime() === singleStartDate.getTime());
+      if (!alreadyIncluded) startDates.push(singleStartDate);
+    }
+
+    if (hasStartDates && startDates.length === 0) {
+      return NextResponse.json({ ok: false, message: 'start_dates tidak boleh kosong' }, { status: 400 });
+    }
+
+    const endDateInput = toDateOrNull(body.end_date);
+    let durationSecondsInput = body.duration_seconds ?? null;
+    if (durationSecondsInput !== null) {
+      const parsed = Number(durationSecondsInput);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return NextResponse.json({ ok: false, message: 'duration_seconds tidak valid' }, { status: 400 });
+      }
+      durationSecondsInput = Math.floor(parsed);
     }
 
     // Snapshot pembuat (admin/operator yang sedang login)
@@ -247,74 +278,94 @@ export async function POST(request) {
         });
         const label = creator?.nama_pengguna || creator?.email || actorId;
         const role = creator?.role || auth?.actor?.role || '';
-        created_by_snapshot = [label, role ? `(${String(role)})` : null]
-          .filter(Boolean)
-          .join(' ')
-          .slice(0, 255);
+        created_by_snapshot = [label, role ? `(${String(role)})` : null].filter(Boolean).join(' ').slice(0, 255);
       }
     } catch (e) {
       // fallback: biarkan null jika gagal mengambil snapshot
       created_by_snapshot = null;
     }
 
-    const data = {
-      id_user,
-      id_agenda,
-      deskripsi_kerja,
-      status: statusValue,
-      start_date,
-      end_date,
-      duration_seconds,
-      id_absensi: body.id_absensi ?? null,
-      created_by_snapshot,
-    };
+    const createdItems = await db.$transaction(
+      startDates.map((startDate) => {
+        let endDate = endDateInput;
+        let durationSeconds = durationSecondsInput;
 
-    const created = await db.agendaKerja.create({
-      data,
-      include: {
-        agenda: { select: { id_agenda: true, nama_agenda: true } },
-        absensi: { select: { id_absensi: true, tanggal: true, jam_masuk: true, jam_pulang: true } },
-        user: { select: { id_user: true, nama_pengguna: true, email: true, role: true } },
-      },
-    });
-
-    // Notifikasi (tetap sama)
-    const agendaTitle = created.agenda?.nama_agenda || 'Agenda Baru';
-    const friendlyDeadline = formatDateTimeDisplay(created.end_date);
-    const adminTitle = `Admin Menambahkan Agenda: ${agendaTitle}`;
-    const adminBody = [`Admin menambahkan agenda kerja "${agendaTitle}" untuk Anda.`, friendlyDeadline ? `Selesaikan sebelum ${friendlyDeadline}.` : ''].filter(Boolean).join(' ').trim();
-
-    try {
-      await sendNotification(
-        'NEW_AGENDA_ASSIGNED',
-        created.id_user,
-        {
-          nama_karyawan: created.user?.nama_pengguna || 'Karyawan',
-          judul_agenda: agendaTitle,
-          tanggal_deadline: formatDateTime(created.end_date),
-          tanggal_deadline_display: friendlyDeadline,
-          pemberi_tugas: 'Panel Admin',
-          title: adminTitle,
-          body: adminBody,
-          overrideTitle: adminTitle,
-          overrideBody: adminBody,
-          related_table: 'agenda_kerja',
-          related_id: created.id_agenda_kerja,
-          deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
-        },
-        {
-          dedupeKey: `NEW_AGENDA_ASSIGNED:${created.id_agenda_kerja}`,
-          collapseKey: `AGENDA_${created.id_agenda_kerja}`,
-          deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
+        if (startDate && endDate && endDate < startDate) {
+          throw new Error('end_date tidak boleh sebelum start_date');
         }
-      );
-    } catch (notifErr) {
-      console.error('[NOTIF] gagal:', notifErr);
+
+        if (durationSeconds == null && startDate && endDate) {
+          durationSeconds = Math.max(0, Math.floor((endDate - startDate) / 1000));
+        }
+
+        if (!endDate && startDate && durationSeconds != null) {
+          endDate = new Date(startDate.getTime() + durationSeconds * 1000);
+        }
+
+        const data = {
+          id_user,
+          id_agenda,
+          deskripsi_kerja,
+          status: statusValue,
+          start_date: startDate,
+          end_date: endDate,
+          duration_seconds: durationSeconds,
+          id_absensi: body.id_absensi ?? null,
+          created_by_snapshot,
+        };
+
+        return db.agendaKerja.create({
+          data,
+          include: {
+            agenda: { select: { id_agenda: true, nama_agenda: true } },
+            absensi: { select: { id_absensi: true, tanggal: true, jam_masuk: true, jam_pulang: true } },
+            user: { select: { id_user: true, nama_pengguna: true, email: true, role: true } },
+          },
+        });
+      })
+    );
+
+    for (const created of createdItems) {
+      const agendaTitle = created.agenda?.nama_agenda || 'Agenda Baru';
+      const friendlyDeadline = formatDateTimeDisplay(created.end_date);
+      const adminTitle = `Admin Menambahkan Agenda: ${agendaTitle}`;
+      const adminBody = [`Admin menambahkan agenda kerja "${agendaTitle}" untuk Anda.`, friendlyDeadline ? `Selesaikan sebelum ${friendlyDeadline}.` : ''].filter(Boolean).join(' ').trim();
+
+      try {
+        await sendNotification(
+          'NEW_AGENDA_ASSIGNED',
+          created.id_user,
+          {
+            nama_karyawan: created.user?.nama_pengguna || 'Karyawan',
+            judul_agenda: agendaTitle,
+            tanggal_deadline: formatDateTime(created.end_date),
+            tanggal_deadline_display: friendlyDeadline,
+            pemberi_tugas: 'Panel Admin',
+            title: adminTitle,
+            body: adminBody,
+            overrideTitle: adminTitle,
+            overrideBody: adminBody,
+            related_table: 'agenda_kerja',
+            related_id: created.id_agenda_kerja,
+            deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
+          },
+          {
+            dedupeKey: `NEW_AGENDA_ASSIGNED:${created.id_agenda_kerja}`,
+            collapseKey: `AGENDA_${created.id_agenda_kerja}`,
+            deeplink: `/agenda-kerja/${created.id_agenda_kerja}`,
+          }
+        );
+      } catch (notifErr) {
+        console.error('[NOTIF] gagal:', notifErr);
+      }
     }
 
-    return NextResponse.json({ ok: true, data: created }, { status: 201 });
+    return NextResponse.json({ ok: true, data: createdItems, meta: { created: createdItems.length } }, { status: 201 });
   } catch (err) {
     console.error(err);
+    if (err instanceof Error && err.message === 'end_date tidak boleh sebelum start_date') {
+      return NextResponse.json({ ok: false, message: err.message }, { status: 400 });
+    }
     return NextResponse.json({ ok: false, message: 'Gagal membuat agenda kerja' }, { status: 500 });
   }
 }

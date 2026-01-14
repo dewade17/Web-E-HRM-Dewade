@@ -9,6 +9,7 @@ import { uploadMediaWithFallback } from '@/app/api/_utils/uploadWithFallback';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from './_utils/approvals';
 import { sendNotification } from '@/app/utils/services/notificationService';
+import { sendReimburseEmailNotifications } from './_utils/emailNotifications';
 
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 const SUPER_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -449,6 +450,12 @@ export async function POST(req) {
         include: reimburseInclude,
       });
     });
+
+    try {
+      await sendReimburseEmailNotifications(req, created);
+    } catch (emailErr) {
+      console.warn('POST /mobile/reimburse: email notification failed:', emailErr?.message || emailErr);
+    }
 
     // Notifikasi: konfirmasi ke pembuat + ke approver_user_id jika ada
     const notified = new Set();
