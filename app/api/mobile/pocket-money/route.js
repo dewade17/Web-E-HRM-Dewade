@@ -9,6 +9,7 @@ import { uploadMediaWithFallback } from '@/app/api/_utils/uploadWithFallback';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from './_utils/approvals';
 import { sendNotification } from '@/app/utils/services/notificationService';
+import { sendPocketMoneyEmailNotifications } from './_utils/emailNotifications';
 
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 const SUPER_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -498,6 +499,13 @@ export async function POST(req) {
     }
 
     Promise.allSettled(notifPromises).catch(() => {});
+    if (full) {
+      try {
+        await sendPocketMoneyEmailNotifications(req, full);
+      } catch (emailErr) {
+        console.warn('POST /mobile/pocket-money: email notification failed:', emailErr?.message || emailErr);
+      }
+    }
 
     return NextResponse.json({ ok: true, message: 'Pocket money berhasil dibuat.', data: full, upload: uploadMeta }, { status: 201 });
   } catch (err) {

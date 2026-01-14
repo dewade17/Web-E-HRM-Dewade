@@ -9,6 +9,7 @@ import { uploadMediaWithFallback } from '@/app/api/_utils/uploadWithFallback';
 import { parseRequestBody, findFileInBody } from '@/app/api/_utils/requestBody';
 import { parseApprovalsFromBody, ensureApprovalUsersExist, syncApprovalRecords } from './_utils/approvals';
 import { sendNotification } from '@/app/utils/services/notificationService';
+import { sendPaymentEmailNotifications } from './_utils/emailNotifications';
 
 const ADMIN_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN', 'SUBADMIN', 'SUPERVISI']);
 const SUPER_ROLES = new Set(['HR', 'OPERASIONAL', 'DIREKTUR', 'SUPERADMIN']);
@@ -144,7 +145,6 @@ export async function ensureAuth(req) {
     session: sessionOrRes,
   };
 }
-
 
 async function getActorUser(actorId) {
   if (!actorId) return null;
@@ -394,6 +394,13 @@ export async function POST(req) {
       where: { id_payment: created.id_payment },
       include: paymentInclude,
     });
+    if (full) {
+      try {
+        await sendPaymentEmailNotifications(req, full);
+      } catch (emailErr) {
+        console.warn('POST /mobile/payment: email notification failed:', emailErr?.message || emailErr);
+      }
+    }
 
     // Notifikasi: supervisor departement + approver(s) + actor
     const notified = new Set();
