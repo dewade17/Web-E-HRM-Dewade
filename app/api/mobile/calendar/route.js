@@ -120,6 +120,18 @@ export async function GET(request) {
     const toRaw = searchParams.get('to');
     const { from: rangeFrom, to: rangeTo } = normalizeDateRange(fromRaw, toRaw);
 
+    const shiftWhere = {
+      deleted_at: null,
+      tanggal_mulai: { lte: rangeTo },
+      tanggal_selesai: { gte: rangeFrom },
+    };
+
+    // Jika parameter user_id diisi di URL, maka filter per user.
+    // Jika dikosongkan, maka akan menjadi Global (semua user).
+    if (userIdFilter) {
+      shiftWhere.id_user = targetUserId;
+    }
+
     // 1. STORY PLANNER (Personal)
     const fetchStoryPlanners = approvedOnly
       ? Promise.resolve([])
@@ -143,10 +155,10 @@ export async function GET(request) {
     const fetchShiftKerja = approvedOnly
       ? Promise.resolve([])
       : db.shiftKerja.findMany({
-          where: {
-            deleted_at: null,
-            tanggal_mulai: { lte: rangeTo },
-            tanggal_selesai: { gte: rangeFrom },
+          where: shiftWhere,
+          select: {
+            id_shift_kerja: true,
+            id_user: true,
           },
           select: {
             id_shift_kerja: true,
