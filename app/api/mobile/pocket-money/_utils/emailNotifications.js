@@ -126,7 +126,7 @@ export async function sendPocketMoneyEmailNotifications(req, pocketMoney) {
   const from = process.env.MAIL_FROM || username;
   if (!from || !username || !password || !pocketMoney) return;
 
-  const url = 'https://e-hrm.onestepsolutionbali.com/home/pocket-money';
+  const url = 'https://e-hrm.onestepsolutionbali.com/home/finance';
   const pemohonName = pocketMoney.user?.nama_pengguna || 'Karyawan';
   const pemohonEmail = normalizeEmail(pocketMoney.user?.email);
   const departement = pocketMoney.user?.departement?.nama_departement || pocketMoney.departement?.nama_departement || '-';

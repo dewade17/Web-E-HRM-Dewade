@@ -126,7 +126,7 @@ export async function sendReimburseEmailNotifications(req, reimburse) {
   const from = process.env.MAIL_FROM || username;
   if (!from || !username || !password || !reimburse) return;
 
-  const url = 'https://e-hrm.onestepsolutionbali.com/home/reimburse';
+  const url = 'https://e-hrm.onestepsolutionbali.com/home/finance';
   const pemohonName = reimburse.user?.nama_pengguna || 'Karyawan';
   const pemohonEmail = normalizeEmail(reimburse.user?.email);
   const departement = reimburse.user?.departement?.nama_departement || reimburse.departement?.nama_departement || '-';
